@@ -148,14 +148,6 @@ private struct BottomToolbarView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
-        // A Done key above the keyboard so it can always be dismissed (tapping the
-        // web view doesn't resign the address field's focus).
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") { addressFocused = false }
-            }
-        }
         // Reflect the active tab's URL when not editing; show the raw URL while editing.
         .onChange(of: model.selectedID) { syncAddress(tab.page.url) }
         .onChange(of: tab.page.url) { if !addressFocused { syncAddress(tab.page.url) } }

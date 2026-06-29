@@ -1,13 +1,4 @@
 import SwiftUI
-import UIKit
-
-/// Resigns first responder app-wide, dismissing the keyboard from any focused
-/// field without needing a per-view `@FocusState` binding.
-@MainActor
-func dismissKeyboard() {
-    UIApplication.shared.sendAction(
-        #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-}
 
 struct ContentView: View {
     @StateObject private var proxy = ProxyController()
@@ -67,12 +58,6 @@ struct ContentView: View {
             }
             .navigationTitle("flextunnel")
             .scrollDismissesKeyboard(.interactively)
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { dismissKeyboard() }
-                }
-            }
         }
     }
 
