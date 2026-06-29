@@ -3,9 +3,10 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var proxy = ProxyController()
 
-    @State private var serverNodeID = ""
+    @AppStorage("lastServerNodeID") private var serverNodeID = ""
     @State private var authToken = ""
     @State private var relayURLs = ""
+    @State private var socksPortText = "18080"
 
     var body: some View {
         NavigationStack {
@@ -17,10 +18,27 @@ struct ContentView: View {
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
                     TextField("Relay URLs (comma-separated, optional)", text: $relayURLs)
                         .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    TextField("SOCKS bind port", text: $socksPortText)
+                        .keyboardType(.numberPad)
+                        .autocorrectionDisabled()
+                        .onChange(of: socksPortText) { _, newValue in
+                            let filtered = newValue.filter { $0.isNumber }
+                            if filtered != newValue {
+                                socksPortText = filtered
+                            }
+                        }
+                    if let portValidationMessage {
+                        Text(portValidationMessage)
+                            .foregroundStyle(.red)
+                            .font(.footnote)
+                    }
                 }
 
                 Section("Status") {
                     LabeledContent("State", value: proxy.status)
+                    if let socksPort = proxy.socksPort {
+                        LabeledContent("SOCKS", value: "127.0.0.1:\(socksPort)")
+                    }
                     if proxy.socksPort != nil {
                         LabeledContent("Health") {
                             Label(proxy.healthy ? "alive" : "down",
@@ -38,7 +56,7 @@ struct ContentView: View {
                     Button("Start proxy") {
                         proxy.start(currentSettings())
                     }
-                    .disabled(serverNodeID.isEmpty || authToken.isEmpty)
+                    .disabled(!canStartProxy)
 
                     Button("Stop", role: .destructive) {
                         proxy.stop()
@@ -46,13 +64,18 @@ struct ContentView: View {
                     .disabled(proxy.socksPort == nil)
                 }
 
-                if let socksPort = proxy.socksPort {
+                if let socksPort = proxy.socksPort, proxy.healthy {
                     Section("Browse (through SOCKS5)") {
                         NavigationLink("Open browser") {
-                            BrowserView(model: BrowserModel(socksPort: socksPort))
+                            BrowserView(model: BrowserModel(socksPort: socksPort), proxy: proxy)
                                 .navigationTitle("Browser")
                                 .navigationBarTitleDisplayMode(.inline)
                         }
+                    }
+                } else {
+                    Section("Browse (through SOCKS5)") {
+                        Label("Start a healthy proxy to browse", systemImage: "lock.shield")
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -61,10 +84,42 @@ struct ContentView: View {
         }
     }
 
+    private var trimmedServerNodeID: String {
+        serverNodeID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedAuthToken: String {
+        authToken.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var parsedSocksPort: UInt16? {
+        let trimmed = socksPortText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Int(trimmed), (1...65535).contains(value) else {
+            return nil
+        }
+        return UInt16(value)
+    }
+
+    private var portValidationMessage: String? {
+        let trimmed = socksPortText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "Enter a SOCKS port."
+        }
+        guard let value = Int(trimmed), (1...65535).contains(value) else {
+            return "Use a port from 1 to 65535."
+        }
+        return nil
+    }
+
+    private var canStartProxy: Bool {
+        !trimmedServerNodeID.isEmpty && !trimmedAuthToken.isEmpty && parsedSocksPort != nil
+    }
+
     private func currentSettings() -> ProxyController.Settings {
         ProxyController.Settings(
-            serverNodeID: serverNodeID.trimmingCharacters(in: .whitespaces),
-            authToken: authToken.trimmingCharacters(in: .whitespaces),
+            serverNodeID: trimmedServerNodeID,
+            authToken: trimmedAuthToken,
+            socksPort: parsedSocksPort ?? 18080,
             relayURLs: splitCSV(relayURLs)
         )
     }

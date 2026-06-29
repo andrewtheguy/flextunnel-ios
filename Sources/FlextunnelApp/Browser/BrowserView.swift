@@ -6,10 +6,13 @@ import WebKit
 /// back/forward, reload-or-stop, and the address bar.
 struct BrowserView: View {
     @State var model: BrowserModel
+    @ObservedObject var proxy: ProxyController
+    @Environment(\.dismiss) private var dismiss
+    @State private var showingTunnelStatus = false
 
     var body: some View {
         VStack(spacing: 0) {
-            TabStripView(model: model)
+            TabStripView(model: model, proxyAvailable: proxyAvailable)
             Divider()
 
             let tab = model.selectedTab
@@ -21,8 +24,64 @@ struct BrowserView: View {
                 .task(id: tab.id) { await tab.observeNavigations() }
 
             Divider()
-            BottomToolbarView(model: model)
+            BottomToolbarView(
+                model: model,
+                proxyAvailable: proxyAvailable,
+                tunnelStatusIcon: tunnelStatusIcon,
+                tunnelStatusColor: tunnelStatusColor,
+                showingTunnelStatus: $showingTunnelStatus)
         }
+        .popover(isPresented: $showingTunnelStatus) {
+            TunnelStatusPopover(
+                proxy: proxy,
+                boundPort: model.socksPort,
+                onStopAndReconfigure: stopAndDismiss)
+                .presentationCompactAdaptation(.sheet)
+        }
+        .onAppear { enforceProxyAvailability() }
+        .onChange(of: proxy.healthy) { enforceProxyAvailability() }
+        .onChange(of: proxy.socksPort) { enforceProxyAvailability() }
+    }
+
+    private var proxyAvailable: Bool {
+        proxy.healthy && proxy.socksPort == model.socksPort
+    }
+
+    private var tunnelStatusIcon: String {
+        if proxyAvailable {
+            return "checkmark.shield.fill"
+        }
+        if proxy.socksPort != nil || proxy.status == "error" {
+            return "exclamationmark.shield.fill"
+        }
+        return "shield.slash.fill"
+    }
+
+    private var tunnelStatusColor: Color {
+        if proxyAvailable {
+            return .green
+        }
+        if proxy.socksPort != nil || proxy.status == "error" {
+            return .red
+        }
+        return .secondary
+    }
+
+    private func enforceProxyAvailability() {
+        model.proxyIsAvailable = proxyAvailable
+        guard proxyAvailable else {
+            model.stopAll()
+            showingTunnelStatus = false
+            dismiss()
+            return
+        }
+    }
+
+    private func stopAndDismiss() {
+        model.stopAll()
+        proxy.stop()
+        showingTunnelStatus = false
+        dismiss()
     }
 
     @ViewBuilder
@@ -58,6 +117,7 @@ struct BrowserView: View {
 /// Horizontal strip of tab chips with a trailing "+" to open a new tab.
 private struct TabStripView: View {
     @Bindable var model: BrowserModel
+    let proxyAvailable: Bool
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -75,6 +135,7 @@ private struct TabStripView: View {
                         .frame(width: 32, height: 28)
                 }
                 .buttonStyle(.bordered)
+                .disabled(!proxyAvailable)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -117,6 +178,10 @@ private struct TabChip: View {
 /// Back / forward / reload-or-stop controls plus the address bar.
 private struct BottomToolbarView: View {
     @Bindable var model: BrowserModel
+    let proxyAvailable: Bool
+    let tunnelStatusIcon: String
+    let tunnelStatusColor: Color
+    @Binding var showingTunnelStatus: Bool
     @State private var editText = ""
     @FocusState private var addressFocused: Bool
 
@@ -124,14 +189,15 @@ private struct BottomToolbarView: View {
         let tab = model.selectedTab
         HStack(spacing: 12) {
             Button { tab.goBack() } label: { Image(systemName: "chevron.left") }
-                .disabled(!tab.canGoBack)
+                .disabled(!proxyAvailable || !tab.canGoBack)
             Button { tab.goForward() } label: { Image(systemName: "chevron.right") }
-                .disabled(!tab.canGoForward)
+                .disabled(!proxyAvailable || !tab.canGoForward)
             Button {
                 if tab.page.isLoading { tab.stop() } else { tab.reload() }
             } label: {
                 Image(systemName: tab.page.isLoading ? "xmark" : "arrow.clockwise")
             }
+            .disabled(!proxyAvailable)
 
             TextField("Search or enter address", text: $editText)
                 .textFieldStyle(.roundedBorder)
@@ -141,9 +207,19 @@ private struct BottomToolbarView: View {
                 .submitLabel(.go)
                 .focused($addressFocused)
                 .onSubmit {
+                    guard proxyAvailable else { return }
                     model.navigate(editText)
                     addressFocused = false
                 }
+                .disabled(!proxyAvailable)
+
+            Button {
+                showingTunnelStatus = true
+            } label: {
+                Image(systemName: tunnelStatusIcon)
+                    .foregroundStyle(tunnelStatusColor)
+            }
+            .accessibilityLabel("Tunnel status")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -157,5 +233,54 @@ private struct BottomToolbarView: View {
 
     private func syncAddress(_ url: URL?) {
         editText = url?.absoluteString ?? ""
+    }
+}
+
+private struct TunnelStatusPopover: View {
+    @ObservedObject var proxy: ProxyController
+    let boundPort: UInt16
+    let onStopAndReconfigure: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(healthTitle, systemImage: healthIcon)
+                .font(.headline)
+                .foregroundStyle(healthColor)
+
+            LabeledContent("State", value: proxy.status)
+            LabeledContent("SOCKS", value: "127.0.0.1:\(proxy.socksPort ?? boundPort)")
+            LabeledContent("Health") {
+                Label(proxy.healthy ? "alive" : "down", systemImage: healthIcon)
+                    .foregroundStyle(healthColor)
+            }
+
+            if let error = proxy.lastError {
+                Text(error)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+
+            Button(role: .destructive, action: onStopAndReconfigure) {
+                Label("Stop and Reconfigure", systemImage: "stop.circle")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding()
+        .frame(minWidth: 280, idealWidth: 320)
+    }
+
+    private var healthTitle: String {
+        proxy.healthy ? "Tunnel is healthy" : "Tunnel is unavailable"
+    }
+
+    private var healthIcon: String {
+        proxy.healthy ? "checkmark.shield.fill" : "exclamationmark.shield.fill"
+    }
+
+    private var healthColor: Color {
+        proxy.healthy ? .green : .red
     }
 }

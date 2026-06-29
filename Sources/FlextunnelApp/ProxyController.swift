@@ -21,6 +21,7 @@ final class ProxyController: ObservableObject {
     struct Settings {
         var serverNodeID: String
         var authToken: String
+        var socksPort: UInt16
         var relayURLs: [String]
     }
 
@@ -36,6 +37,7 @@ final class ProxyController: ObservableObject {
         let configDict: [String: Any] = [
             "server_node_id": s.serverNodeID,
             "auth_token": s.authToken,
+            "socks_port": Int(s.socksPort),
             "relay_urls": s.relayURLs,
             "dns_server": NSNull(),
         ]

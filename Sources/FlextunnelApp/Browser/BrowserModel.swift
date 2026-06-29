@@ -11,6 +11,7 @@ final class BrowserModel {
     let socksPort: UInt16
     private(set) var tabs: [BrowserTab]
     var selectedID: BrowserTab.ID
+    var proxyIsAvailable = true
 
     init(socksPort: UInt16) {
         self.socksPort = socksPort
@@ -30,6 +31,7 @@ final class BrowserModel {
 
     /// Opens a fresh proxied tab at the home page and selects it.
     func addTab() {
+        guard proxyIsAvailable else { return }
         let tab = BrowserTab.make(socksPort: socksPort)
         tabs.append(tab)
         selectedID = tab.id
@@ -52,8 +54,14 @@ final class BrowserModel {
     ///   directly; a missing scheme is prepended (`http://` for `.onion`, else `https://`).
     /// - Anything else is treated as a query and sent to DuckDuckGo.
     func navigate(_ text: String) {
+        guard proxyIsAvailable else { return }
         guard let url = Self.resolve(text) else { return }
         selectedTab.load(url)
+    }
+
+    func stopAll() {
+        tabs.forEach { $0.stop() }
+        proxyIsAvailable = false
     }
 
     static func resolve(_ text: String) -> URL? {

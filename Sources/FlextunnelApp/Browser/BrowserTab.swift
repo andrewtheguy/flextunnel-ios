@@ -23,7 +23,7 @@ final class BrowserTab: Identifiable {
 
     private let log = Logger(subsystem: "com.example.flextunnel", category: "webview")
 
-    init(page: WebPage) {
+    private init(page: WebPage) {
         self.page = page
     }
 
