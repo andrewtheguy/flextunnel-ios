@@ -4,9 +4,10 @@
 # Then open Flextunnel.xcodeproj, select your signing Team, and run.
 #
 # Unlike ezvpn-ios there is NO Network Extension: flextunnel runs a SOCKS5
-# listener inside the app process and a WKWebView is routed through it via
-# WKWebsiteDataStore.proxyConfigurations (iOS 17+). No special entitlement and
-# no paid Apple Developer account are required; it also runs in the Simulator.
+# listener inside the app process and a SwiftUI WebView (WebPage) is routed
+# through it via WebPage.Configuration.websiteDataStore.proxyConfigurations
+# (iOS 26+). No special entitlement and no paid Apple Developer account are
+# required; it also runs in the Simulator.
 #
 # The Rust static library + header come from the sibling flextunnel repo:
 #   cd ../flextunnel && ./build-ios.sh release
@@ -16,7 +17,7 @@ name: Flextunnel
 options:
   bundleIdPrefix: com.example.flextunnel
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.0"
   createIntermediateGroups: true
 
 settings:

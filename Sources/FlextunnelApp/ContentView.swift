@@ -1,4 +1,13 @@
 import SwiftUI
+import UIKit
+
+/// Resigns first responder app-wide, dismissing the keyboard from any focused
+/// field without needing a per-view `@FocusState` binding.
+@MainActor
+func dismissKeyboard() {
+    UIApplication.shared.sendAction(
+        #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+}
 
 struct ContentView: View {
     @StateObject private var proxy = ProxyController()
@@ -6,13 +15,6 @@ struct ContentView: View {
     @State private var serverNodeID = ""
     @State private var authToken = ""
     @State private var relayURLs = ""
-    @State private var urlString = "https://example.com"
-
-    /// The URL to load once the proxy is running and the field parses.
-    private var loadURL: URL? {
-        guard proxy.socksPort != nil else { return nil }
-        return URL(string: urlString.trimmingCharacters(in: .whitespaces))
-    }
 
     var body: some View {
         NavigationStack {
@@ -53,23 +55,24 @@ struct ContentView: View {
                     .disabled(proxy.socksPort == nil)
                 }
 
-                if proxy.socksPort != nil {
+                if let socksPort = proxy.socksPort {
                     Section("Browse (through SOCKS5)") {
-                        TextField("URL", text: $urlString)
-                            .autocorrectionDisabled().textInputAutocapitalization(.never)
-                            .keyboardType(.URL)
-                        if let url = loadURL {
-                            NavigationLink("Open in proxied WebView") {
-                                ProxyWebView(socksPort: proxy.socksPort!, url: url)
-                                    .ignoresSafeArea(edges: .bottom)
-                                    .navigationTitle(url.host() ?? "Web")
-                                    .navigationBarTitleDisplayMode(.inline)
-                            }
+                        NavigationLink("Open browser") {
+                            BrowserView(model: BrowserModel(socksPort: socksPort))
+                                .navigationTitle("Browser")
+                                .navigationBarTitleDisplayMode(.inline)
                         }
                     }
                 }
             }
             .navigationTitle("flextunnel")
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { dismissKeyboard() }
+                }
+            }
         }
     }
 
