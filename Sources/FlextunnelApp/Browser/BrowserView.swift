@@ -278,6 +278,15 @@ private struct BrowserLoadFailureView: View {
                 .lineLimit(3)
                 .frame(maxWidth: 320)
 
+            if failure.reason != failure.message {
+                Text(failure.reason)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(4)
+                    .frame(maxWidth: 320)
+            }
+
             Text(failure.url.host() ?? failure.url.absoluteString)
                 .font(.footnote.monospaced())
                 .foregroundStyle(.tertiary)

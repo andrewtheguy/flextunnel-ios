@@ -231,7 +231,10 @@ final class BrowserTab: Identifiable {
             if addressText.isEmpty || previousAttempt != attemptedURL {
                 addressText = attemptedURL.absoluteString
             }
-            loadFailure = BrowserLoadFailure(url: attemptedURL, message: message)
+            loadFailure = BrowserLoadFailure(
+                url: attemptedURL,
+                message: message,
+                reason: nsError.localizedDescription)
         }
     }
 
@@ -292,7 +295,11 @@ final class BrowserTab: Identifiable {
 
 struct BrowserLoadFailure {
     let url: URL
+    /// Friendly one-line summary mapped from the error code.
     let message: String
+    /// The underlying system error description — the specific reason the load
+    /// failed, shown when it adds detail beyond `message`.
+    let reason: String
 }
 
 enum BrowserSiteSecurity: Equatable {
