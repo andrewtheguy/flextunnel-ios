@@ -58,9 +58,11 @@ final class BrowserModel {
     /// - Anything else is treated as a query and sent to DuckDuckGo.
     func navigate(_ text: String) {
         guard proxyIsAvailable else { return }
-        guard let url = Self.resolve(text) else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let url = Self.resolve(trimmed) else { return }
         guard let tab = selectedTab ?? addTab() else { return }
-        tab.load(url)
+        tab.load(url, displayAddress: trimmed)
     }
 
     func stopAll() {
@@ -72,22 +74,66 @@ final class BrowserModel {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        // Already a full URL with a scheme.
-        if let url = URL(string: trimmed), let scheme = url.scheme, !scheme.isEmpty {
+        if let url = webURL(from: trimmed) {
             return url
         }
 
-        // Looks like a bare hostname/URL: no spaces and contains a dot.
-        if !trimmed.contains(" "), trimmed.contains(".") {
-            let scheme = trimmed.hasSuffix(".onion") || trimmed.contains(".onion/") ? "http" : "https"
-            if let url = URL(string: "\(scheme)://\(trimmed)") {
-                return url
-            }
-        }
-
-        // Otherwise treat as a search query.
         var components = URLComponents(string: "https://duckduckgo.com/")
         components?.queryItems = [URLQueryItem(name: "q", value: trimmed)]
         return components?.url
+    }
+
+    private static func webURL(from text: String) -> URL? {
+        if let localhostURL = localhostURL(from: text) {
+            return localhostURL
+        }
+
+        let lowercased = text.lowercased()
+        if lowercased.hasPrefix("http://") || lowercased.hasPrefix("https://") {
+            return validHTTPURL(from: text)
+        }
+
+        if lowercased.contains("://") {
+            return nil
+        }
+
+        return bareHostURL(from: text)
+    }
+
+    private static func localhostURL(from text: String) -> URL? {
+        guard !text.contains(" ") else { return nil }
+        guard let components = URLComponents(string: "http://\(text)"),
+              components.host?.lowercased() == "localhost" else {
+            return nil
+        }
+        return components.url
+    }
+
+    private static func validHTTPURL(from text: String) -> URL? {
+        guard !text.contains(" "),
+              let components = URLComponents(string: text),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host,
+              hostIsNavigable(host) else {
+            return nil
+        }
+        return components.url
+    }
+
+    private static func bareHostURL(from text: String) -> URL? {
+        guard !text.contains(" "), text.contains("."), Double(text) == nil else { return nil }
+
+        let scheme = text.hasSuffix(".onion") || text.contains(".onion/") ? "http" : "https"
+        guard let components = URLComponents(string: "\(scheme)://\(text)"),
+              let host = components.host,
+              hostIsNavigable(host) else {
+            return nil
+        }
+        return components.url
+    }
+
+    private static func hostIsNavigable(_ host: String) -> Bool {
+        host == "localhost" || host.contains(".")
     }
 }

@@ -87,7 +87,7 @@ private struct TabCard: View {
                         .multilineTextAlignment(.leading)
                         .padding(.trailing, 28)
 
-                    Text(tab.page.url?.host() ?? "New Tab")
+                    Text(tab.displaySubtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

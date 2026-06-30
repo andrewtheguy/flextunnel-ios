@@ -24,10 +24,15 @@ struct BrowserView: View {
             Divider()
 
             if let tab = model.selectedTab {
-                WebView(tab.page)
-                    .webViewBackForwardNavigationGestures(.enabled)
-                    .overlay(alignment: .top) { progressBar(for: tab.page) }
-                    .overlay(alignment: .bottom) { errorBanner(for: tab) }
+                if let failure = tab.loadFailure {
+                    BrowserLoadFailureView(
+                        failure: failure,
+                        onRetry: { tab.retryFailedLoad() })
+                } else {
+                    WebView(tab.page)
+                        .webViewBackForwardNavigationGestures(.enabled)
+                        .overlay(alignment: .top) { progressBar(for: tab.page) }
+                }
             } else {
                 EmptyBrowserView(
                     proxyAvailable: proxyAvailable,
@@ -108,26 +113,6 @@ struct BrowserView: View {
         }
     }
 
-    @ViewBuilder
-    private func errorBanner(for tab: BrowserTab) -> some View {
-        if let error = tab.lastError {
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                Text(error).font(.footnote).lineLimit(2)
-                Spacer(minLength: 0)
-                Button {
-                    tab.lastError = nil
-                } label: {
-                    Image(systemName: "xmark")
-                }
-            }
-            .padding(10)
-            .background(.red.opacity(0.9), in: RoundedRectangle(cornerRadius: 10))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
-        }
-    }
 }
 
 private struct EmptyBrowserView: View {
@@ -149,6 +134,45 @@ private struct EmptyBrowserView: View {
             .buttonStyle(.borderedProminent)
             .disabled(!proxyAvailable)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
+}
+
+private struct BrowserLoadFailureView: View {
+    let failure: BrowserLoadFailure
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 42, weight: .light))
+                .foregroundStyle(.secondary)
+
+            Text("Problem Loading Page")
+                .font(.title3.weight(.semibold))
+
+            Text(failure.message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+                .frame(maxWidth: 320)
+
+            Text(failure.url.host() ?? failure.url.absoluteString)
+                .font(.footnote.monospaced())
+                .foregroundStyle(.tertiary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+
+            Button(action: onRetry) {
+                Label("Try Again", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 4)
+        }
+        .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
     }
@@ -214,14 +238,14 @@ private struct AddressBarView: View {
         .padding(.vertical, 8)
         .background(.bar)
         // Reflect the active tab's URL when not editing; show the raw URL while editing.
-        .onChange(of: model.selectedID) { syncAddress(model.selectedTab?.page.url) }
-        .onChange(of: tab?.page.url) { if !addressFocused { syncAddress(tab?.page.url) } }
-        .onChange(of: addressFocused) { if addressFocused { editText = tab?.page.url?.absoluteString ?? editText } }
-        .onAppear { syncAddress(tab?.page.url) }
+        .onChange(of: model.selectedID) { syncAddress(model.selectedTab?.addressText) }
+        .onChange(of: tab?.addressText) { if !addressFocused { syncAddress(tab?.addressText) } }
+        .onChange(of: addressFocused) { if addressFocused { editText = tab?.addressText ?? editText } }
+        .onAppear { syncAddress(tab?.addressText) }
     }
 
-    private func syncAddress(_ url: URL?) {
-        editText = url?.absoluteString ?? ""
+    private func syncAddress(_ address: String?) {
+        editText = address ?? ""
     }
 }
 
