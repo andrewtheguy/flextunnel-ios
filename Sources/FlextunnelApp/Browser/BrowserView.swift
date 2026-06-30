@@ -1,18 +1,26 @@
 import SwiftUI
+import UIKit
 import WebKit
 
-/// Full-screen browser chrome over the proxied `WebPage`s: a lightweight tab
-/// strip, the web view with a thin progress bar, and a bottom toolbar with
-/// back/forward, reload-or-stop, and the address bar.
+/// Full-screen browser chrome over the proxied `WebPage`s, laid out like Firefox
+/// iOS / Onion Browser: a top address bar (tunnel status, URL field, reload/stop),
+/// the web view with a thin progress bar, and a bottom action toolbar
+/// (back/forward, share, bookmark, tab tray, overflow menu).
 struct BrowserView: View {
     @State var model: BrowserModel
     @ObservedObject var proxy: ProxyController
     @Environment(\.dismiss) private var dismiss
     @State private var showingTunnelStatus = false
+    @State private var showingTabTray = false
 
     var body: some View {
         VStack(spacing: 0) {
-            TabStripView(model: model, proxyAvailable: proxyAvailable)
+            AddressBarView(
+                model: model,
+                proxyAvailable: proxyAvailable,
+                tunnelStatusIcon: tunnelStatusIcon,
+                tunnelStatusColor: tunnelStatusColor,
+                showingTunnelStatus: $showingTunnelStatus)
             Divider()
 
             let tab = model.selectedTab
@@ -22,12 +30,11 @@ struct BrowserView: View {
                 .overlay(alignment: .bottom) { errorBanner(for: tab) }
 
             Divider()
-            BottomToolbarView(
+            BottomActionBar(
                 model: model,
                 proxyAvailable: proxyAvailable,
-                tunnelStatusIcon: tunnelStatusIcon,
-                tunnelStatusColor: tunnelStatusColor,
-                showingTunnelStatus: $showingTunnelStatus)
+                showingTabTray: $showingTabTray,
+                onDisconnect: stopAndDismiss)
         }
         .popover(isPresented: $showingTunnelStatus) {
             TunnelStatusPopover(
@@ -36,6 +43,9 @@ struct BrowserView: View {
                 onDismiss: { showingTunnelStatus = false },
                 onStopAndReconfigure: stopAndDismiss)
                 .presentationCompactAdaptation(.sheet)
+        }
+        .fullScreenCover(isPresented: $showingTabTray) {
+            TabTrayView(model: model)
         }
         .onAppear { enforceProxyAvailability() }
         .onChange(of: proxy.healthy) { enforceProxyAvailability() }
@@ -71,6 +81,7 @@ struct BrowserView: View {
         guard proxyAvailable else {
             model.stopAll()
             showingTunnelStatus = false
+            showingTabTray = false
             dismiss()
             return
         }
@@ -80,6 +91,7 @@ struct BrowserView: View {
         model.stopAll()
         proxy.stop()
         showingTunnelStatus = false
+        showingTabTray = false
         dismiss()
     }
 
@@ -113,73 +125,8 @@ struct BrowserView: View {
     }
 }
 
-/// Horizontal strip of tab chips with a trailing "+" to open a new tab.
-private struct TabStripView: View {
-    @Bindable var model: BrowserModel
-    let proxyAvailable: Bool
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(model.tabs) { tab in
-                    TabChip(
-                        tab: tab,
-                        isSelected: tab.id == model.selectedID,
-                        onSelect: { model.select(tab) },
-                        onClose: { model.closeTab(tab) },
-                        showClose: model.tabs.count > 1)
-                }
-                Button(action: model.addTab) {
-                    Image(systemName: "plus")
-                        .frame(width: 32, height: 28)
-                }
-                .buttonStyle(.bordered)
-                .disabled(!proxyAvailable)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-        }
-        .background(.bar)
-    }
-}
-
-private struct TabChip: View {
-    let tab: BrowserTab
-    let isSelected: Bool
-    let onSelect: () -> Void
-    let onClose: () -> Void
-    let showClose: Bool
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Button(action: onSelect) {
-                Text(tab.displayTitle)
-                    .font(.footnote)
-                    .lineLimit(1)
-                    .frame(maxWidth: 140)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-            if showClose {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close tab")
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(isSelected ? Color.accentColor.opacity(0.2) : Color(.secondarySystemBackground),
-                    in: Capsule())
-        .overlay(Capsule().strokeBorder(isSelected ? Color.accentColor : .clear))
-    }
-}
-
-/// Back / forward / reload-or-stop controls plus the address bar.
-private struct BottomToolbarView: View {
+/// Top chrome: tunnel status icon, the editable address field, and reload/stop.
+private struct AddressBarView: View {
     @Bindable var model: BrowserModel
     let proxyAvailable: Bool
     let tunnelStatusIcon: String
@@ -190,17 +137,15 @@ private struct BottomToolbarView: View {
 
     var body: some View {
         let tab = model.selectedTab
-        HStack(spacing: 12) {
-            Button { tab.goBack() } label: { Image(systemName: "chevron.left") }
-                .disabled(!proxyAvailable || !tab.canGoBack)
-            Button { tab.goForward() } label: { Image(systemName: "chevron.right") }
-                .disabled(!proxyAvailable || !tab.canGoForward)
+        HStack(spacing: 10) {
             Button {
-                if tab.page.isLoading { tab.stop() } else { tab.reload() }
+                showingTunnelStatus = true
             } label: {
-                Image(systemName: tab.page.isLoading ? "xmark" : "arrow.clockwise")
+                Image(systemName: tunnelStatusIcon)
+                    .foregroundStyle(tunnelStatusColor)
+                    .imageScale(.large)
             }
-            .disabled(!proxyAvailable)
+            .accessibilityLabel("Tunnel status")
 
             TextField("Search or enter address", text: $editText)
                 .textFieldStyle(.roundedBorder)
@@ -217,12 +162,13 @@ private struct BottomToolbarView: View {
                 .disabled(!proxyAvailable)
 
             Button {
-                showingTunnelStatus = true
+                if tab.page.isLoading { tab.stop() } else { tab.reload() }
             } label: {
-                Image(systemName: tunnelStatusIcon)
-                    .foregroundStyle(tunnelStatusColor)
+                Image(systemName: tab.page.isLoading ? "xmark" : "arrow.clockwise")
+                    .imageScale(.large)
             }
-            .accessibilityLabel("Tunnel status")
+            .disabled(!proxyAvailable)
+            .accessibilityLabel(tab.page.isLoading ? "Stop loading" : "Reload")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -236,6 +182,90 @@ private struct BottomToolbarView: View {
 
     private func syncAddress(_ url: URL?) {
         editText = url?.absoluteString ?? ""
+    }
+}
+
+/// Bottom toolbar: back, forward, share, bookmark (placeholder), tab tray, menu.
+private struct BottomActionBar: View {
+    @Bindable var model: BrowserModel
+    let proxyAvailable: Bool
+    @Binding var showingTabTray: Bool
+    let onDisconnect: () -> Void
+
+    var body: some View {
+        let tab = model.selectedTab
+        let url = tab.page.url
+        HStack {
+            Button { tab.goBack() } label: { Image(systemName: "chevron.left") }
+                .disabled(!proxyAvailable || !tab.canGoBack)
+
+            Spacer()
+
+            Button { tab.goForward() } label: { Image(systemName: "chevron.right") }
+                .disabled(!proxyAvailable || !tab.canGoForward)
+
+            Spacer()
+
+            if let url {
+                ShareLink(item: url) {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .disabled(!proxyAvailable)
+            } else {
+                Image(systemName: "square.and.arrow.up")
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer()
+
+            // Placeholder — bookmarking is not implemented yet.
+            Button {} label: { Image(systemName: "bookmark") }
+                .disabled(true)
+
+            Spacer()
+
+            Button { showingTabTray = true } label: { tabCountIcon }
+                .accessibilityLabel("Show tabs")
+
+            Spacer()
+
+            Menu {
+                if let url {
+                    Button {
+                        UIPasteboard.general.string = url.absoluteString
+                    } label: {
+                        Label("Copy URL", systemImage: "doc.on.doc")
+                    }
+                    Button {
+                        UIApplication.shared.open(url)
+                    } label: {
+                        Label("Open in Safari (bypasses tunnel)", systemImage: "safari")
+                    }
+                }
+                Divider()
+                Button(role: .destructive, action: onDisconnect) {
+                    Label("Disconnect Tunnel", systemImage: "stop.circle")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .accessibilityLabel("More")
+        }
+        .imageScale(.large)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private var tabCountIcon: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(lineWidth: 2)
+            .frame(width: 26, height: 26)
+            .overlay {
+                Text("\(model.tabs.count)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .monospacedDigit()
+            }
     }
 }
 
