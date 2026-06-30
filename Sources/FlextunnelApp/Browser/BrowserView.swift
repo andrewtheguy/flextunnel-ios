@@ -30,6 +30,10 @@ struct BrowserView: View {
                     BrowserLoadFailureView(
                         failure: failure,
                         onRetry: { tab.retryFailedLoad() })
+                } else if tab.isHome {
+                    BrowserHomeView(
+                        proxyAvailable: proxyAvailable,
+                        onOpen: { model.navigate($0) })
                 } else {
                     WebView(tab.page)
                         .webViewBackForwardNavigationGestures(.enabled)
@@ -131,6 +135,97 @@ struct BrowserView: View {
         }
     }
 
+}
+
+/// Placeholder shown for a fresh tab that hasn't navigated yet — a wordmark and
+/// a grid of search engines, mirroring Firefox iOS's default new-tab page so
+/// startup isn't a blank web view. Tapping a tile loads it through the tunnel.
+private struct BrowserHomeView: View {
+    let proxyAvailable: Bool
+    let onOpen: (String) -> Void
+
+    /// Search engines offered as a starting point. Favicons aren't bundled here,
+    /// so each tile uses a monogram in the engine's brand color.
+    private struct SearchEngine: Identifiable {
+        let id = UUID()
+        let title: String
+        let url: String
+        let color: Color
+        var monogram: String { String(title.prefix(1)) }
+    }
+
+    private let engines = [
+        SearchEngine(title: "Google", url: "https://www.google.com/", color: Color(red: 0.26, green: 0.52, blue: 0.96)),
+        SearchEngine(title: "DuckDuckGo", url: "https://duckduckgo.com/", color: Color(red: 0.87, green: 0.40, blue: 0.16)),
+        SearchEngine(title: "Bing", url: "https://www.bing.com/", color: Color(red: 0.0, green: 0.46, blue: 0.49)),
+        SearchEngine(title: "Wikipedia", url: "https://www.wikipedia.org/", color: Color(.darkGray)),
+    ]
+
+    private let columns = [GridItem(.adaptive(minimum: 72, maximum: 96), spacing: 20)]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 32) {
+                VStack(spacing: 12) {
+                    Image(systemName: "bolt.horizontal.circle.fill")
+                        .font(.system(size: 52, weight: .regular))
+                        .foregroundStyle(.tint)
+
+                    Text("flextunnel")
+                        .font(.largeTitle.weight(.semibold))
+
+                    Text("Search or enter an address to browse through your tunnel.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 320)
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("SEARCH ENGINES")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    LazyVGrid(columns: columns, spacing: 20) {
+                        ForEach(engines) { engine in
+                            Button {
+                                onOpen(engine.url)
+                            } label: {
+                                engineTile(engine)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!proxyAvailable)
+                        }
+                    }
+                }
+                .frame(maxWidth: 420)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 48)
+            .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
+
+    private func engineTile(_ engine: SearchEngine) -> some View {
+        VStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(engine.color)
+                .frame(width: 60, height: 60)
+                .overlay {
+                    Text(engine.monogram)
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.white)
+                }
+
+            Text(engine.title)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        }
+    }
 }
 
 private struct EmptyBrowserView: View {

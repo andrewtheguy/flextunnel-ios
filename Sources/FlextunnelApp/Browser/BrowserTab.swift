@@ -106,6 +106,12 @@ final class BrowserTab: Identifiable {
         loadFailure?.url ?? page.url ?? lastAttemptedURL
     }
 
+    /// True before the tab has navigated anywhere — no committed page, no
+    /// attempted load, no failure. Drives the placeholder home view.
+    var isHome: Bool {
+        visibleURL == nil
+    }
+
     var siteSecurity: BrowserSiteSecurity? {
         guard let url = page.url ?? loadFailure?.url,
               let scheme = url.scheme?.lowercased(),
