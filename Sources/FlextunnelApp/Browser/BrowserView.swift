@@ -17,10 +17,12 @@ struct BrowserView: View {
         VStack(spacing: 0) {
             AddressBarView(
                 model: model,
+                proxy: proxy,
                 proxyAvailable: proxyAvailable,
                 tunnelStatusIcon: tunnelStatusIcon,
                 tunnelStatusColor: tunnelStatusColor,
-                showingTunnelStatus: $showingTunnelStatus)
+                showingTunnelStatus: $showingTunnelStatus,
+                onStopAndReconfigure: stopAndDismiss)
             Divider()
 
             if let tab = model.selectedTab {
@@ -45,14 +47,6 @@ struct BrowserView: View {
                 proxyAvailable: proxyAvailable,
                 showingTabTray: $showingTabTray,
                 onDisconnect: stopAndDismiss)
-        }
-        .popover(isPresented: $showingTunnelStatus) {
-            TunnelStatusPopover(
-                proxy: proxy,
-                boundPort: model.socksPort,
-                onDismiss: { showingTunnelStatus = false },
-                onStopAndReconfigure: stopAndDismiss)
-                .presentationCompactAdaptation(.sheet)
         }
         .fullScreenCover(isPresented: $showingTabTray) {
             TabTrayView(model: model)
@@ -82,12 +76,12 @@ struct BrowserView: View {
 
     private var tunnelStatusIcon: String {
         if proxyAvailable {
-            return "checkmark.shield.fill"
+            return "bolt.horizontal.circle.fill"
         }
         if proxy.socksPort != nil || proxy.status == "error" {
-            return "exclamationmark.shield.fill"
+            return "bolt.horizontal.circle.fill"
         }
-        return "shield.slash.fill"
+        return "bolt.horizontal.circle"
     }
 
     private var tunnelStatusColor: Color {
@@ -205,10 +199,12 @@ private struct BrowserLoadFailureView: View {
 /// Top chrome: app-specific tunnel status plus Firefox-style location surface.
 private struct AddressBarView: View {
     @Bindable var model: BrowserModel
+    let proxy: ProxyController
     let proxyAvailable: Bool
     let tunnelStatusIcon: String
     let tunnelStatusColor: Color
     @Binding var showingTunnelStatus: Bool
+    let onStopAndReconfigure: () -> Void
     @State private var editText = ""
     @State private var showingSiteSecurity = false
     @FocusState private var addressFocused: Bool
@@ -216,8 +212,6 @@ private struct AddressBarView: View {
     var body: some View {
         let tab = model.selectedTab
         HStack(spacing: 8) {
-            tunnelStatusButton
-
             HStack(spacing: 0) {
                 leadingLocationButton(for: tab)
 
@@ -272,6 +266,8 @@ private struct AddressBarView: View {
                         .presentationCompactAdaptation(.popover)
                 }
             }
+
+            tunnelStatusButton
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -299,6 +295,14 @@ private struct AddressBarView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Tunnel status")
+        .popover(isPresented: $showingTunnelStatus, arrowEdge: .top) {
+            TunnelStatusPopover(
+                proxy: proxy,
+                boundPort: model.socksPort,
+                onDismiss: { showingTunnelStatus = false },
+                onStopAndReconfigure: onStopAndReconfigure)
+                .presentationCompactAdaptation(.popover)
+        }
     }
 
     @ViewBuilder
@@ -690,11 +694,12 @@ private struct TunnelStatusPopover: View {
                     Spacer(minLength: 0)
 
                     Button(action: onDismiss) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 14, weight: .semibold))
-                            .frame(width: 32, height: 32)
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
                     .accessibilityLabel("Dismiss status")
                 }
 
@@ -733,7 +738,7 @@ private struct TunnelStatusPopover: View {
     }
 
     private var healthIcon: String {
-        proxy.healthy ? "checkmark.shield.fill" : "exclamationmark.shield.fill"
+        proxy.healthy ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle"
     }
 
     private var healthColor: Color {
