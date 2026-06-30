@@ -309,6 +309,10 @@ private struct AddressBarView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 40, height: 44)
                 .accessibilityHidden(true)
+        } else if tab?.siteSecurity == .notSecure {
+            Color.clear
+                .frame(width: 12, height: 44)
+                .accessibilityHidden(true)
         } else if let tab {
             Button {
                 showingSiteSecurity = true
@@ -372,7 +376,7 @@ private struct AddressBarView: View {
         case .secure:
             return "lock.fill"
         case .notSecure:
-            return "lock.open.fill"
+            return "info.circle"
         case .certificateException:
             return "lock.slash.fill"
         case nil:
@@ -385,7 +389,7 @@ private struct AddressBarView: View {
         case .secure:
             return .secondary
         case .notSecure:
-            return .red
+            return .secondary
         case .certificateException:
             return .orange
         case nil:
@@ -548,7 +552,7 @@ private struct SiteSecurityPopover: View {
         case .secure:
             return "lock.fill"
         case .notSecure:
-            return "lock.open.fill"
+            return "info.circle"
         case .certificateException:
             return "lock.slash.fill"
         case nil:
