@@ -620,15 +620,20 @@ private struct AddressDisplayParts {
     }
 
     /// Number of trailing labels making up the registrable domain (the part to
-    /// emphasize). Defaults to 2 (`example.com`), but bumps to 3 for hosts under
-    /// a known multi-label public suffix (`example.co.uk`) so the suffix isn't
-    /// shown as the primary label. This is a pragmatic subset of the Public
-    /// Suffix List, not the whole thing — an unknown multi-label suffix falls
-    /// back to 2, which under-subdues a subdomain rather than misleading.
+    /// emphasize). This is a pragmatic stand-in for the Public Suffix List,
+    /// erring toward not dimming the registrant:
+    /// - a known multi-label public suffix (`example.co.uk`) → 3;
+    /// - a longer gTLD (`.com`, `.dev`, …) → 2 (the usual eTLD+1);
+    /// - an unknown 2-letter ccTLD (`co.ke`, `github.io`, …), where 2-label and
+    ///   private suffixes are common and the registrable boundary is unknowable
+    ///   without the full PSL → no split, so the whole host stays primary rather
+    ///   than risk promoting the suffix over the registrant.
     private static func registrableLabelCount(for labels: [String]) -> Int {
         guard labels.count >= 3 else { return 2 }
         let lastTwo = labels.suffix(2).joined(separator: ".").lowercased()
-        return multiLabelPublicSuffixes.contains(lastTwo) ? 3 : 2
+        if multiLabelPublicSuffixes.contains(lastTwo) { return 3 }
+        if labels[labels.count - 1].count <= 2 { return labels.count }
+        return 2
     }
 
     private static let multiLabelPublicSuffixes: Set<String> = [
