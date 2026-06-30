@@ -4,9 +4,10 @@
 # Then open Flextunnel.xcodeproj, select your signing Team, and run.
 #
 # Unlike ezvpn-ios there is NO Network Extension: flextunnel runs a SOCKS5
-# listener inside the app process and a WKWebView is routed through it via
-# WKWebsiteDataStore.proxyConfigurations (iOS 17+). No special entitlement and
-# no paid Apple Developer account are required; it also runs in the Simulator.
+# listener inside the app process and a SwiftUI WebView (WebPage) is routed
+# through it via WebPage.Configuration.websiteDataStore.proxyConfigurations
+# (iOS 26+). No special entitlement and no paid Apple Developer account are
+# required; it also runs in the Simulator.
 #
 # The Rust static library + header come from the sibling flextunnel repo:
 #   cd ../flextunnel && ./build-ios.sh release
@@ -16,7 +17,7 @@ name: Flextunnel
 options:
   bundleIdPrefix: com.example.flextunnel
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.0"
   createIntermediateGroups: true
 
 settings:
@@ -34,6 +35,12 @@ targets:
     platform: iOS
     sources:
       - Sources/FlextunnelApp
+    dependencies:
+      # Static-library XCFramework with both the device and Simulator arm64
+      # slices (built by ../flextunnel/build-ios.sh). Xcode links whichever slice
+      # matches the selected destination. embed:false — static libs aren't embedded.
+      - framework: vendor/libflextunnel.xcframework
+        embed: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.flextunnel
@@ -45,16 +52,15 @@ targets:
         MARKETING_VERSION: "0.0.1"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_OBJC_BRIDGING_HEADER: Sources/FlextunnelApp/Bridging-Header.h
-        # Static Rust lib + its system dependencies (same set ezvpn links).
-        LIBRARY_SEARCH_PATHS:
-          - $(inherited)
-          - $(SRCROOT)/vendor
+        # flextunnel.h (for the bridging header) is staged alongside the
+        # XCFramework in vendor/. The Rust lib itself comes from the XCFramework
+        # dependency above; here we only add its system dependencies (same set
+        # ezvpn links).
         HEADER_SEARCH_PATHS:
           - $(inherited)
           - $(SRCROOT)/vendor
         OTHER_LDFLAGS:
           - $(inherited)
-          - -lflextunnel
           - -lresolv
           - -lc++
           - -framework

@@ -1,0 +1,115 @@
+import Foundation
+import Network
+import Observation
+import WebKit
+import os.log
+
+/// A single browser tab: an iOS 26 `WebPage` whose traffic is routed through the
+/// in-app flextunnel SOCKS5 listener at 127.0.0.1:<socksPort> via
+/// `WebPage.Configuration.websiteDataStore.proxyConfigurations`.
+///
+/// SOCKS5 passes the hostname to the proxy (ATYP_DOMAIN), so DNS is resolved on
+/// the flextunnel **server**, not the device — the same mechanism that lets Onion
+/// Browser resolve `.onion` names through Tor's local SOCKS proxy.
+@MainActor
+@Observable
+final class BrowserTab: Identifiable {
+    let id = UUID()
+    let page: WebPage
+
+    /// Surfaces the last navigation failure (e.g. proxy unreachable). The key
+    /// POC signal that distinguishes "proxy reachable" from a failed/bypassed load.
+    var lastError: String?
+
+    private let log = Logger(subsystem: "com.example.flextunnel", category: "webview")
+
+    /// Drains `page.navigations` for the tab's whole lifetime, independent of
+    /// which tab is selected. Cancelled when the tab is closed.
+    private var observationTask: Task<Void, Never>?
+
+    private init(page: WebPage) {
+        self.page = page
+    }
+
+    /// Build a tab whose `WebPage` is proxied through the loopback SOCKS5 listener.
+    /// The shared non-persistent data store keeps all tabs in one ephemeral session.
+    static func make(socksPort: UInt16, websiteDataStore: WKWebsiteDataStore) -> BrowserTab {
+        var config = WebPage.Configuration()
+        config.websiteDataStore = websiteDataStore
+
+        let endpoint = NWEndpoint.hostPort(
+            host: "127.0.0.1",
+            port: NWEndpoint.Port(rawValue: socksPort)!)
+        config.websiteDataStore.proxyConfigurations = [ProxyConfiguration(socksv5Proxy: endpoint)]
+
+        let tab = BrowserTab(page: WebPage(configuration: config))
+        tab.observationTask = Task { [weak tab] in await tab?.observeNavigations() }
+        return tab
+    }
+
+    /// Cancels the lifetime navigation observer. Called when the tab is closed.
+    func stopObserving() {
+        observationTask?.cancel()
+        observationTask = nil
+    }
+
+    // MARK: - Derived state (reads WebPage's @Observable properties)
+
+    /// Page title, falling back to the host, then a placeholder.
+    var displayTitle: String {
+        let title = page.title
+        if !title.isEmpty { return title }
+        if let host = page.url?.host() { return host }
+        return "New Tab"
+    }
+
+    var canGoBack: Bool { !page.backForwardList.backList.isEmpty }
+    var canGoForward: Bool { !page.backForwardList.forwardList.isEmpty }
+
+    // MARK: - Navigation
+
+    func load(_ url: URL) {
+        lastError = nil
+        log.info("loading host \(Self.logHost(for: url), privacy: .public) via in-app SOCKS5")
+        page.load(URLRequest(url: url))
+    }
+
+    func goBack() {
+        guard let item = page.backForwardList.backList.last else { return }
+        page.load(item)
+    }
+
+    func goForward() {
+        guard let item = page.backForwardList.forwardList.first else { return }
+        page.load(item)
+    }
+
+    func reload() {
+        lastError = nil
+        page.reload()
+    }
+
+    func stop() {
+        page.stopLoading()
+    }
+
+    /// Drains the page's navigation events for this tab's lifetime, logging
+    /// outcomes and recording failures into `lastError`. Started in `make` and
+    /// cancelled in `stopObserving`, so it runs regardless of tab selection.
+    private func observeNavigations() async {
+        do {
+            for try await _ in page.navigations {
+                lastError = nil
+            }
+            log.info("navigations stream ended for host \(Self.logHost(for: self.page.url), privacy: .public)")
+        } catch {
+            let message = error.localizedDescription
+            log.error("navigation failed: \(message, privacy: .private)")
+            lastError = message
+        }
+    }
+
+    private static func logHost(for url: URL?) -> String {
+        url?.host() ?? "unknown"
+    }
+}

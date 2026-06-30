@@ -2,6 +2,7 @@
 *.xcodeproj
 
 # Build artifacts staged by ../flextunnel/build-ios.sh.
+vendor/libflextunnel.xcframework/
 vendor/libflextunnel.a
 vendor/flextunnel.h
 
