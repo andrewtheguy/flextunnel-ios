@@ -76,6 +76,10 @@ These are passed straight through to the FFI config (`whitelist_domains` /
 rejects off-list tunnel requests as defense in depth. Run the server (or watch
 the app's logs via `RUST_LOG=debug`) to confirm which hosts tunnel vs. go direct.
 
+Off-list hosts are **always direct-connected** today (never blocked). A future
+client-side blocking mode is on the roadmap — see "Whitelist split-tunneling →
+Roadmap" in the [flextunnel README](../flextunnel/README.md).
+
 ## Verifying server-side DNS
 
 Run the flextunnel **server** with `RUST_LOG=info`. Browsing should log
