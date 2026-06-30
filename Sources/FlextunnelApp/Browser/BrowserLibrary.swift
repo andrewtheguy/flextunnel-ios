@@ -31,17 +31,18 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
     }
 }
 
-/// Owns the user's bookmarks and browsing history and persists both to
-/// UserDefaults as JSON, by product choice, so they survive across launches.
+/// Owns the user's bookmarks and browsing history and persists both as JSON
+/// files in the app container, matching how mainstream browsers store history.
 ///
-/// Privacy tradeoff worth keeping in mind: in a tunnel browser, history (and
-/// bookmarked URLs) is sensitive — it records exactly what was browsed. Yet
-/// UserDefaults is only guarded by the device file-protection class and can be
-/// included in device backups, unlike the auth token, which `TokenStore` pins
-/// to the Keychain with `…ThisDeviceOnly` so it never leaves the device. If
-/// that tradeoff is unacceptable, switch history to session-only or secure,
-/// non-syncing storage. (WebKit's own data store stays non-persistent; this is
-/// our own lightweight record, independent of it.)
+/// Because history (and bookmarked URLs) is sensitive in a tunnel browser, the
+/// files follow the protections mainstream iOS browsers rely on rather than the
+/// weaker UserDefaults plist:
+/// - written with Data Protection `…UntilFirstUserAuthentication` (encrypted at
+///   rest, readable after the first unlock so it survives backgrounding);
+/// - excluded from iCloud / device backups, so the record never leaves the
+///   device — like the auth token in `TokenStore`.
+/// (WebKit's own data store stays non-persistent; this is our own lightweight
+/// record, independent of it.)
 @MainActor
 @Observable
 final class BrowserLibrary {
@@ -51,14 +52,17 @@ final class BrowserLibrary {
     /// Upper bound on stored history entries; the oldest are dropped past this.
     private static let historyLimit = 500
 
-    private let defaults: UserDefaults
-    private static let bookmarksKey = "bookmarks"
-    private static let historyKey = "history"
+    private let bookmarksURL: URL
+    private let historyURL: URL
 
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        bookmarks = Self.decode([Bookmark].self, from: defaults, key: Self.bookmarksKey) ?? []
-        history = Self.decode([HistoryEntry].self, from: defaults, key: Self.historyKey) ?? []
+    init(directory: URL? = nil) {
+        let dir = directory ?? Self.defaultDirectory()
+        Self.prepareDirectory(dir)
+        bookmarksURL = dir.appendingPathComponent("bookmarks.json")
+        historyURL = dir.appendingPathComponent("history.json")
+        bookmarks = Self.load([Bookmark].self, from: bookmarksURL) ?? []
+        history = Self.load([HistoryEntry].self, from: historyURL) ?? []
+        Self.purgeLegacyUserDefaults()
     }
 
     // MARK: - Bookmarks
@@ -128,20 +132,47 @@ final class BrowserLibrary {
     // MARK: - Persistence
 
     private func persistBookmarks() {
-        Self.encode(bookmarks, into: defaults, key: Self.bookmarksKey)
+        Self.save(bookmarks, to: bookmarksURL)
     }
 
     private func persistHistory() {
-        Self.encode(history, into: defaults, key: Self.historyKey)
+        Self.save(history, to: historyURL)
     }
 
-    private static func decode<T: Decodable>(_ type: T.Type, from defaults: UserDefaults, key: String) -> T? {
-        guard let data = defaults.data(forKey: key) else { return nil }
+    /// `Application Support/BrowserLibrary` — the conventional spot for app data
+    /// the user doesn't manage directly.
+    private static func defaultDirectory() -> URL {
+        let base = (try? FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("BrowserLibrary", isDirectory: true)
+    }
+
+    /// Creates the directory and marks it excluded from backups, which also
+    /// excludes its contents.
+    private static func prepareDirectory(_ dir: URL) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var dir = dir
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? dir.setResourceValues(values)
+    }
+
+    private static func load<T: Decodable>(_ type: T.Type, from url: URL) -> T? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
     }
 
-    private static func encode<T: Encodable>(_ value: T, into defaults: UserDefaults, key: String) {
+    private static func save<T: Encodable>(_ value: T, to url: URL) {
         guard let data = try? JSONEncoder().encode(value) else { return }
-        defaults.set(data, forKey: key)
+        // Encrypted at rest, readable after first unlock; best-effort.
+        try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    /// Removes browsing data left in UserDefaults by earlier builds so the
+    /// sensitive record doesn't linger in the weaker, backup-eligible store.
+    private static func purgeLegacyUserDefaults() {
+        UserDefaults.standard.removeObject(forKey: "bookmarks")
+        UserDefaults.standard.removeObject(forKey: "history")
     }
 }
