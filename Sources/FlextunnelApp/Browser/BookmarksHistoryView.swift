@@ -15,29 +15,33 @@ struct BookmarksHistoryView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                switch section {
-                case .bookmarks: bookmarksList
-                case .history: historyList
+            VStack(spacing: 0) {
+                Picker("Section", selection: $section) {
+                    Text("Bookmarks").tag(Section.bookmarks)
+                    Text("History").tag(Section.history)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+
+                Divider()
+
+                Group {
+                    switch section {
+                    case .bookmarks: bookmarksList
+                    case .history: historyList
+                    }
                 }
             }
-            .navigationTitle(section == .bookmarks ? "Bookmarks" : "History")
+            .navigationTitle("Library")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Picker("Section", selection: $section) {
-                        Text("Bookmarks").tag(Section.bookmarks)
-                        Text("History").tag(Section.history)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 240)
-                }
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
                 if section == .history && !library.history.isEmpty {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Clear", role: .destructive) { library.clearHistory() }
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("Clear History", role: .destructive) { library.clearHistory() }
                     }
                 }
             }
