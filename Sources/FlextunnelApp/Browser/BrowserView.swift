@@ -23,11 +23,16 @@ struct BrowserView: View {
                 showingTunnelStatus: $showingTunnelStatus)
             Divider()
 
-            let tab = model.selectedTab
-            WebView(tab.page)
-                .webViewBackForwardNavigationGestures(.enabled)
-                .overlay(alignment: .top) { progressBar(for: tab.page) }
-                .overlay(alignment: .bottom) { errorBanner(for: tab) }
+            if let tab = model.selectedTab {
+                WebView(tab.page)
+                    .webViewBackForwardNavigationGestures(.enabled)
+                    .overlay(alignment: .top) { progressBar(for: tab.page) }
+                    .overlay(alignment: .bottom) { errorBanner(for: tab) }
+            } else {
+                EmptyBrowserView(
+                    proxyAvailable: proxyAvailable,
+                    onNewTab: { model.addTab() })
+            }
 
             Divider()
             BottomActionBar(
@@ -125,6 +130,30 @@ struct BrowserView: View {
     }
 }
 
+private struct EmptyBrowserView: View {
+    let proxyAvailable: Bool
+    let onNewTab: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "square.on.square")
+                .font(.system(size: 44, weight: .light))
+                .foregroundStyle(.secondary)
+
+            Text("No Tabs")
+                .font(.title3.weight(.semibold))
+
+            Button(action: onNewTab) {
+                Label("New Tab", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!proxyAvailable)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
+}
+
 /// Top chrome: tunnel status icon, the editable address field, and reload/stop.
 private struct AddressBarView: View {
     @Bindable var model: BrowserModel
@@ -161,23 +190,34 @@ private struct AddressBarView: View {
                 }
                 .disabled(!proxyAvailable)
 
-            Button {
-                if tab.page.isLoading { tab.stop() } else { tab.reload() }
-            } label: {
-                Image(systemName: tab.page.isLoading ? "xmark" : "arrow.clockwise")
-                    .imageScale(.large)
+            if let tab = tab {
+                Button {
+                    if tab.page.isLoading { tab.stop() } else { tab.reload() }
+                } label: {
+                    Image(systemName: tab.page.isLoading ? "xmark" : "arrow.clockwise")
+                        .imageScale(.large)
+                }
+                .disabled(!proxyAvailable)
+                .accessibilityLabel(tab.page.isLoading ? "Stop loading" : "Reload")
+            } else {
+                Button {
+                    model.addTab()
+                } label: {
+                    Image(systemName: "plus")
+                        .imageScale(.large)
+                }
+                .disabled(!proxyAvailable)
+                .accessibilityLabel("New tab")
             }
-            .disabled(!proxyAvailable)
-            .accessibilityLabel(tab.page.isLoading ? "Stop loading" : "Reload")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
         // Reflect the active tab's URL when not editing; show the raw URL while editing.
-        .onChange(of: model.selectedID) { syncAddress(tab.page.url) }
-        .onChange(of: tab.page.url) { if !addressFocused { syncAddress(tab.page.url) } }
-        .onChange(of: addressFocused) { if addressFocused { editText = tab.page.url?.absoluteString ?? editText } }
-        .onAppear { syncAddress(tab.page.url) }
+        .onChange(of: model.selectedID) { syncAddress(model.selectedTab?.page.url) }
+        .onChange(of: tab?.page.url) { if !addressFocused { syncAddress(tab?.page.url) } }
+        .onChange(of: addressFocused) { if addressFocused { editText = tab?.page.url?.absoluteString ?? editText } }
+        .onAppear { syncAddress(tab?.page.url) }
     }
 
     private func syncAddress(_ url: URL?) {
@@ -194,15 +234,15 @@ private struct BottomActionBar: View {
 
     var body: some View {
         let tab = model.selectedTab
-        let url = tab.page.url
+        let url = tab?.page.url
         HStack {
-            Button { tab.goBack() } label: { Image(systemName: "chevron.left") }
-                .disabled(!proxyAvailable || !tab.canGoBack)
+            Button { tab?.goBack() } label: { Image(systemName: "chevron.left") }
+                .disabled(!proxyAvailable || tab?.canGoBack != true)
 
             Spacer()
 
-            Button { tab.goForward() } label: { Image(systemName: "chevron.right") }
-                .disabled(!proxyAvailable || !tab.canGoForward)
+            Button { tab?.goForward() } label: { Image(systemName: "chevron.right") }
+                .disabled(!proxyAvailable || tab?.canGoForward != true)
 
             Spacer()
 
@@ -242,12 +282,13 @@ private struct BottomActionBar: View {
                         Label("Open in Safari (bypasses tunnel)", systemImage: "safari")
                     }
                 }
-                Button {
-                    model.closeTab(tab)
-                } label: {
-                    Label("Close Tab", systemImage: "xmark.square")
+                if let tab = tab {
+                    Button {
+                        model.closeTab(tab)
+                    } label: {
+                        Label("Close Tab", systemImage: "xmark.square")
+                    }
                 }
-                .disabled(model.tabs.count <= 1)
                 Divider()
                 Button(role: .destructive, action: onDisconnect) {
                     Label("Disconnect Tunnel", systemImage: "stop.circle")

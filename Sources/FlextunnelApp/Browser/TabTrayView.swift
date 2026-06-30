@@ -12,21 +12,43 @@ struct TabTrayView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 16) {
-                    ForEach(model.tabs) { tab in
-                        TabCard(
-                            tab: tab,
-                            isSelected: tab.id == model.selectedID,
-                            showClose: model.tabs.count > 1,
-                            onSelect: {
-                                model.select(tab)
-                                dismiss()
-                            },
-                            onClose: { model.closeTab(tab) })
+            Group {
+                if model.tabs.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "square.on.square")
+                            .font(.system(size: 44, weight: .light))
+                            .foregroundStyle(.secondary)
+
+                        Text("No Tabs")
+                            .font(.title3.weight(.semibold))
+
+                        Button {
+                            model.addTab()
+                            dismiss()
+                        } label: {
+                            Label("New Tab", systemImage: "plus")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!model.proxyIsAvailable)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 16) {
+                            ForEach(model.tabs) { tab in
+                                TabCard(
+                                    tab: tab,
+                                    isSelected: tab.id == model.selectedID,
+                                    onSelect: {
+                                        model.select(tab)
+                                        dismiss()
+                                    },
+                                    onClose: { model.closeTab(tab) })
+                            }
+                        }
+                        .padding(16)
                     }
                 }
-                .padding(16)
             }
             .navigationTitle("Tabs")
             .navigationBarTitleDisplayMode(.inline)
@@ -52,46 +74,44 @@ struct TabTrayView: View {
 private struct TabCard: View {
     let tab: BrowserTab
     let isSelected: Bool
-    let showClose: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
 
     var body: some View {
-        Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .top, spacing: 6) {
+        ZStack(alignment: .topTrailing) {
+            Button(action: onSelect) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(tab.displayTitle)
                         .font(.subheadline.weight(.medium))
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.trailing, 28)
 
-                    if showClose {
-                        Button(action: onClose) {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 18))
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Close tab")
-                    }
+                    Text(tab.page.url?.host() ?? "New Tab")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
+                .padding(12)
+                .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
 
-                Text(tab.page.url?.host() ?? "New Tab")
-                    .font(.caption)
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 18))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
             }
+            .buttonStyle(.plain)
             .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14)
-                    .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 14))
+            .accessibilityLabel("Close tab")
         }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }

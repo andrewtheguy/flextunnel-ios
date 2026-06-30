@@ -9,7 +9,7 @@ import WebKit
 final class BrowserModel {
     let socksPort: UInt16
     private(set) var tabs: [BrowserTab]
-    var selectedID: BrowserTab.ID
+    var selectedID: BrowserTab.ID?
     var proxyIsAvailable = true
     private let websiteDataStore = WKWebsiteDataStore.nonPersistent()
 
@@ -20,8 +20,11 @@ final class BrowserModel {
         self.selectedID = first.id
     }
 
-    var selectedTab: BrowserTab {
-        tabs.first { $0.id == selectedID } ?? tabs[0]
+    var selectedTab: BrowserTab? {
+        if let selectedID, let selected = tabs.first(where: { $0.id == selectedID }) {
+            return selected
+        }
+        return tabs.first
     }
 
     func select(_ tab: BrowserTab) {
@@ -29,22 +32,23 @@ final class BrowserModel {
     }
 
     /// Opens a fresh proxied tab at the home page and selects it.
-    func addTab() {
-        guard proxyIsAvailable else { return }
+    @discardableResult
+    func addTab() -> BrowserTab? {
+        guard proxyIsAvailable else { return nil }
         let tab = BrowserTab.make(socksPort: socksPort, websiteDataStore: websiteDataStore)
         tabs.append(tab)
         selectedID = tab.id
+        return tab
     }
 
-    /// Closes a tab, never dropping below one. Reselects a neighbor if the closed
-    /// tab was active.
+    /// Closes a tab. Reselects a neighbor if the closed tab was active, or leaves
+    /// the browser with no selected tab when the last tab is closed.
     func closeTab(_ tab: BrowserTab) {
-        guard tabs.count > 1, let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         tab.stopObserving()
         tabs.remove(at: index)
         if selectedID == tab.id {
-            let neighbor = tabs[min(index, tabs.count - 1)]
-            selectedID = neighbor.id
+            selectedID = tabs.isEmpty ? nil : tabs[min(index, tabs.count - 1)].id
         }
     }
 
@@ -55,7 +59,8 @@ final class BrowserModel {
     func navigate(_ text: String) {
         guard proxyIsAvailable else { return }
         guard let url = Self.resolve(text) else { return }
-        selectedTab.load(url)
+        guard let tab = selectedTab ?? addTab() else { return }
+        tab.load(url)
     }
 
     func stopAll() {
