@@ -64,9 +64,9 @@ struct DownloadsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if case .finished = item.state {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.green)
             }
         }
         .contentShape(Rectangle())
