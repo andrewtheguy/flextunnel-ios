@@ -32,10 +32,16 @@ struct HistoryEntry: Identifiable, Codable, Equatable {
 }
 
 /// Owns the user's bookmarks and browsing history and persists both to
-/// UserDefaults as JSON. These are non-sensitive, so they live in UserDefaults
-/// — the same split documented in `TokenStore`, where only the auth token is
-/// secret enough to warrant the Keychain. (WebKit's own data store stays
-/// non-persistent; this is our own lightweight record, independent of it.)
+/// UserDefaults as JSON, by product choice, so they survive across launches.
+///
+/// Privacy tradeoff worth keeping in mind: in a tunnel browser, history (and
+/// bookmarked URLs) is sensitive — it records exactly what was browsed. Yet
+/// UserDefaults is only guarded by the device file-protection class and can be
+/// included in device backups, unlike the auth token, which `TokenStore` pins
+/// to the Keychain with `…ThisDeviceOnly` so it never leaves the device. If
+/// that tradeoff is unacceptable, switch history to session-only or secure,
+/// non-syncing storage. (WebKit's own data store stays non-persistent; this is
+/// our own lightweight record, independent of it.)
 @MainActor
 @Observable
 final class BrowserLibrary {
