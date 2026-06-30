@@ -827,10 +827,6 @@ private struct BottomActionBar: View {
                     }
                 }
                 Divider()
-                Button(role: .destructive, action: onDisconnect) {
-                    Label("Disconnect Tunnel", systemImage: "stop.circle")
-                }
-                Divider()
                 if let url {
                     Button {
                         UIApplication.shared.open(url)
@@ -844,6 +840,10 @@ private struct BottomActionBar: View {
                     } label: {
                         Label("Close Tab", systemImage: "xmark.square")
                     }
+                }
+                Divider()
+                Button(role: .destructive, action: onDisconnect) {
+                    Label("Disconnect Tunnel", systemImage: "stop.circle")
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
