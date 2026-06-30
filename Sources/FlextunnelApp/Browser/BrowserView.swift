@@ -2,10 +2,10 @@ import SwiftUI
 import UIKit
 import WebKit
 
-/// Full-screen browser chrome over the proxied `WebPage`s, laid out like Firefox
-/// iOS / Onion Browser: a top address bar (tunnel status, URL field, reload/stop),
-/// the web view with a thin progress bar, and a bottom action toolbar
-/// (back/forward, share, bookmark, tab tray, overflow menu).
+/// Full-screen browser chrome over proxied `WebPage`s. The location surface
+/// follows Firefox iOS: leading page actions, site identity/search, URL text,
+/// and stop/reload as the trailing page action. Tunnel status is this app's
+/// custom leading page action inside that standard browser surface.
 struct BrowserView: View {
     @State var model: BrowserModel
     @ObservedObject var proxy: ProxyController
@@ -202,7 +202,7 @@ private struct BrowserLoadFailureView: View {
     }
 }
 
-/// Top chrome: tunnel status icon, the editable address field, and reload/stop.
+/// Top chrome: Firefox-style location surface plus app-specific tunnel status.
 private struct AddressBarView: View {
     @Bindable var model: BrowserModel
     let proxyAvailable: Bool
@@ -210,66 +210,371 @@ private struct AddressBarView: View {
     let tunnelStatusColor: Color
     @Binding var showingTunnelStatus: Bool
     @State private var editText = ""
+    @State private var showingSiteSecurity = false
     @FocusState private var addressFocused: Bool
 
     var body: some View {
         let tab = model.selectedTab
-        HStack(spacing: 10) {
-            Button {
-                showingTunnelStatus = true
-            } label: {
-                Image(systemName: tunnelStatusIcon)
-                    .foregroundStyle(tunnelStatusColor)
-                    .imageScale(.large)
+        HStack(spacing: 0) {
+            HStack(spacing: 0) {
+                tunnelStatusButton
+                leadingLocationButton(for: tab)
+
+                ZStack(alignment: .leading) {
+                    TextField("Search or enter address", text: $editText)
+                        .textFieldStyle(.plain)
+                        .keyboardType(.webSearch)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .submitLabel(.go)
+                        .focused($addressFocused)
+                        .opacity(addressFocused ? 1 : 0)
+                        .allowsHitTesting(addressFocused)
+                        .onSubmit {
+                            guard proxyAvailable else { return }
+                            model.navigate(editText)
+                            addressFocused = false
+                        }
+                        .disabled(!proxyAvailable)
+
+                    if !addressFocused {
+                        Button {
+                            beginEditing(tab)
+                        } label: {
+                            AddressDisplayText(tab: tab)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!proxyAvailable)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 44)
+
+                trailingLocationButton(for: tab)
             }
-            .accessibilityLabel("Tunnel status")
-
-            TextField("Search or enter address", text: $editText)
-                .textFieldStyle(.roundedBorder)
-                .keyboardType(.URL)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .submitLabel(.go)
-                .focused($addressFocused)
-                .onSubmit {
-                    guard proxyAvailable else { return }
-                    model.navigate(editText)
-                    addressFocused = false
+            .frame(height: 44)
+            .padding(.leading, 2)
+            .padding(.trailing, 4)
+            .background {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Color(.separator).opacity(0.18), lineWidth: 0.5)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .popover(isPresented: $showingSiteSecurity) {
+                if let tab {
+                    SiteSecurityPopover(tab: tab)
+                        .presentationCompactAdaptation(.popover)
                 }
-                .disabled(!proxyAvailable)
-
-            if let tab = tab {
-                Button {
-                    if tab.page.isLoading { tab.stop() } else { tab.reload() }
-                } label: {
-                    Image(systemName: tab.page.isLoading ? "xmark" : "arrow.clockwise")
-                        .imageScale(.large)
-                }
-                .disabled(!proxyAvailable)
-                .accessibilityLabel(tab.page.isLoading ? "Stop loading" : "Reload")
-            } else {
-                Button {
-                    model.addTab()
-                } label: {
-                    Image(systemName: "plus")
-                        .imageScale(.large)
-                }
-                .disabled(!proxyAvailable)
-                .accessibilityLabel("New tab")
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
-        // Reflect the active tab's URL when not editing; show the raw URL while editing.
         .onChange(of: model.selectedID) { syncAddress(model.selectedTab?.addressText) }
         .onChange(of: tab?.addressText) { if !addressFocused { syncAddress(tab?.addressText) } }
-        .onChange(of: addressFocused) { if addressFocused { editText = tab?.addressText ?? editText } }
+        .onChange(of: addressFocused) { _, focused in
+            if focused {
+                editText = tab?.addressText ?? editText
+            } else {
+                syncAddress(tab?.addressText)
+            }
+        }
         .onAppear { syncAddress(tab?.addressText) }
+    }
+
+    private var tunnelStatusButton: some View {
+        Button {
+            showingTunnelStatus = true
+        } label: {
+            Image(systemName: tunnelStatusIcon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tunnelStatusColor)
+                .frame(width: 40, height: 44)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Tunnel status")
+    }
+
+    @ViewBuilder
+    private func leadingLocationButton(for tab: BrowserTab?) -> some View {
+        if addressFocused || tab?.siteSecurity == nil {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 40, height: 44)
+                .accessibilityHidden(true)
+        } else if let tab {
+            Button {
+                showingSiteSecurity = true
+            } label: {
+                Image(systemName: siteSecurityIcon(for: tab.siteSecurity))
+                    .font(.system(size: 16, weight: .semibold))
+                    .symbolRenderingMode(tab.siteSecurity == .notSecure ? .multicolor : .monochrome)
+                    .foregroundStyle(siteSecurityColor(for: tab.siteSecurity))
+                    .frame(width: 40, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(siteSecurityAccessibilityLabel(for: tab.siteSecurity))
+        }
+    }
+
+    @ViewBuilder
+    private func trailingLocationButton(for tab: BrowserTab?) -> some View {
+        if addressFocused {
+            if !editText.isEmpty {
+                Button {
+                    editText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear address")
+            }
+        } else if let tab {
+            Button {
+                if tab.page.isLoading {
+                    tab.stop()
+                } else {
+                    tab.reload()
+                }
+            } label: {
+                Image(systemName: tab.page.isLoading ? "xmark" : "arrow.clockwise")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 40, height: 44)
+            }
+            .buttonStyle(.plain)
+            .disabled(!proxyAvailable)
+            .accessibilityLabel(tab.page.isLoading ? "Stop loading" : "Reload")
+        }
+    }
+
+    private func beginEditing(_ tab: BrowserTab?) {
+        guard proxyAvailable else { return }
+        editText = tab?.addressText ?? editText
+        addressFocused = true
     }
 
     private func syncAddress(_ address: String?) {
         editText = address ?? ""
+    }
+
+    private func siteSecurityIcon(for security: BrowserSiteSecurity?) -> String {
+        switch security {
+        case .secure:
+            return "checkmark.shield.fill"
+        case .notSecure:
+            return "shield.slash.fill"
+        case .certificateException:
+            return "exclamationmark.shield.fill"
+        case nil:
+            return "magnifyingglass"
+        }
+    }
+
+    private func siteSecurityColor(for security: BrowserSiteSecurity?) -> Color {
+        switch security {
+        case .secure:
+            return .secondary
+        case .notSecure:
+            return .red
+        case .certificateException:
+            return .orange
+        case nil:
+            return .secondary
+        }
+    }
+
+    private func siteSecurityAccessibilityLabel(for security: BrowserSiteSecurity?) -> String {
+        switch security {
+        case .secure:
+            return "Secure connection"
+        case .notSecure:
+            return "Connection is not secure"
+        case .certificateException:
+            return "Certificate exception"
+        case nil:
+            return "Search or enter address"
+        }
+    }
+}
+
+@MainActor
+private struct AddressDisplayText: View {
+    let tab: BrowserTab?
+
+    var body: some View {
+        if let tab,
+           let parts = AddressDisplayParts(tab: tab) {
+            HStack(spacing: 0) {
+                if !parts.subduedPrefix.isEmpty {
+                    Text(parts.subduedPrefix)
+                        .foregroundStyle(.secondary)
+                }
+                Text(parts.primaryText)
+                    .foregroundStyle(.primary)
+            }
+            .font(.body)
+            .lineLimit(1)
+            .truncationMode(.head)
+        } else if let address = tab?.addressText, !address.isEmpty {
+            Text(address)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.head)
+        } else {
+            Text("Search or enter address")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+}
+
+@MainActor
+private struct AddressDisplayParts {
+    let subduedPrefix: String
+    let primaryText: String
+
+    init?(tab: BrowserTab) {
+        guard let url = tab.visibleURL,
+              let host = url.host(),
+              !host.isEmpty else {
+            return nil
+        }
+
+        let displayHost = Self.displayHost(host)
+        let portSuffix = Self.portSuffix(for: url)
+        guard Self.canSplit(host: displayHost) else {
+            subduedPrefix = ""
+            primaryText = displayHost + portSuffix
+            return
+        }
+
+        let labels = displayHost.split(separator: ".")
+        guard labels.count > 2 else {
+            subduedPrefix = ""
+            primaryText = displayHost + portSuffix
+            return
+        }
+
+        subduedPrefix = labels.dropLast(2).joined(separator: ".") + "."
+        primaryText = labels.suffix(2).joined(separator: ".") + portSuffix
+    }
+
+    private static func displayHost(_ host: String) -> String {
+        host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+    }
+
+    private static func portSuffix(for url: URL) -> String {
+        guard let port = url.port else { return "" }
+        let scheme = url.scheme?.lowercased()
+        if scheme == "https", port == 443 { return "" }
+        if scheme == "http", port == 80 { return "" }
+        return ":\(port)"
+    }
+
+    private static func canSplit(host: String) -> Bool {
+        if host == "localhost" { return false }
+        if host.hasPrefix("[") && host.hasSuffix("]") { return false }
+        if host.allSatisfy({ $0.isNumber || $0 == "." }) { return false }
+        return true
+    }
+}
+
+@MainActor
+private struct SiteSecurityPopover: View {
+    let tab: BrowserTab
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(title, systemImage: icon)
+                .font(.headline)
+                .foregroundStyle(color)
+
+            if let url = tab.visibleURL {
+                Text(hostText(for: url))
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding()
+        .frame(width: 300, alignment: .leading)
+    }
+
+    private var title: String {
+        switch tab.siteSecurity {
+        case .secure:
+            return "Secure Connection"
+        case .notSecure:
+            return "Not Secure"
+        case .certificateException:
+            return "Certificate Exception"
+        case nil:
+            return "Site Information"
+        }
+    }
+
+    private var message: String {
+        switch tab.siteSecurity {
+        case .secure:
+            return "The connection uses HTTPS."
+        case .notSecure:
+            return "The connection does not use HTTPS."
+        case .certificateException:
+            return "You allowed this certificate for the current browser session."
+        case nil:
+            return "No site information is available."
+        }
+    }
+
+    private var icon: String {
+        switch tab.siteSecurity {
+        case .secure:
+            return "checkmark.shield.fill"
+        case .notSecure:
+            return "shield.slash.fill"
+        case .certificateException:
+            return "exclamationmark.shield.fill"
+        case nil:
+            return "info.circle"
+        }
+    }
+
+    private var color: Color {
+        switch tab.siteSecurity {
+        case .secure:
+            return .green
+        case .notSecure:
+            return .red
+        case .certificateException:
+            return .orange
+        case nil:
+            return .secondary
+        }
+    }
+
+    private func hostText(for url: URL) -> String {
+        guard let host = url.host() else { return url.absoluteString }
+        if let port = url.port {
+            return "\(host):\(port)"
+        }
+        return host
     }
 }
 

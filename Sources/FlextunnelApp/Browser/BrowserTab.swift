@@ -25,6 +25,7 @@ final class BrowserTab: Identifiable {
     var certificateWarning: BrowserCertificateWarning?
 
     private let log = Logger(subsystem: "com.example.flextunnel", category: "webview")
+    private let certificateTrustStore: BrowserCertificateTrustStore
     private let navigationDecider: BrowserNavigationDecider
     private var lastAttemptedURL: URL?
     private var certificateWarningContinuation: CheckedContinuation<Bool, Never>?
@@ -33,8 +34,13 @@ final class BrowserTab: Identifiable {
     /// which tab is selected. Cancelled when the tab is closed.
     private var observationTask: Task<Void, Never>?
 
-    private init(page: WebPage, navigationDecider: BrowserNavigationDecider) {
+    private init(
+        page: WebPage,
+        certificateTrustStore: BrowserCertificateTrustStore,
+        navigationDecider: BrowserNavigationDecider
+    ) {
         self.page = page
+        self.certificateTrustStore = certificateTrustStore
         self.navigationDecider = navigationDecider
     }
 
@@ -56,6 +62,7 @@ final class BrowserTab: Identifiable {
         let navigationDecider = BrowserNavigationDecider(certificateTrustStore: certificateTrustStore)
         let tab = BrowserTab(
             page: WebPage(configuration: config, navigationDecider: navigationDecider),
+            certificateTrustStore: certificateTrustStore,
             navigationDecider: navigationDecider)
         navigationDecider.certificateWarningHandler = { [weak tab] warning in
             await tab?.requestCertificateWarning(warning) ?? false
@@ -93,6 +100,32 @@ final class BrowserTab: Identifiable {
 
     var canGoBack: Bool { !page.backForwardList.backList.isEmpty }
     var canGoForward: Bool { !page.backForwardList.forwardList.isEmpty }
+
+    var visibleURL: URL? {
+        loadFailure?.url ?? page.url ?? lastAttemptedURL
+    }
+
+    var siteSecurity: BrowserSiteSecurity? {
+        guard let url = page.url ?? loadFailure?.url,
+              let scheme = url.scheme?.lowercased(),
+              let host = url.host(),
+              scheme == "http" || scheme == "https" else {
+            return nil
+        }
+
+        guard scheme == "https" else {
+            return .notSecure
+        }
+
+        let port = url.port ?? 443
+        if certificateTrustStore.isTrusted(host: host, port: port) {
+            return .certificateException
+        }
+        if loadFailure != nil {
+            return .notSecure
+        }
+        return .secure
+    }
 
     // MARK: - Navigation
 
@@ -253,6 +286,12 @@ final class BrowserTab: Identifiable {
 struct BrowserLoadFailure {
     let url: URL
     let message: String
+}
+
+enum BrowserSiteSecurity: Equatable {
+    case secure
+    case notSecure
+    case certificateException
 }
 
 struct BrowserCertificateWarning: Identifiable, Equatable {
