@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0" stop-color="rgb(16%,49%,96%)"/>
+      <stop offset="1" stop-color="rgb(10%,30%,78%)"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <g fill="none" stroke="white" stroke-linecap="round">
+    <g stroke-width="32.768">
+      <line x1="512.0" y1="174.07999999999998" x2="512.0" y2="849.9200000000001"/>
+      <line x1="174.07999999999998" y1="512.0" x2="849.9200000000001" y2="512.0"/>
+      <ellipse cx="512.0" cy="512.0" rx="168.96" ry="337.92"/>
+      <ellipse cx="512.0" cy="512.0" rx="337.92" ry="168.96"/>
+    </g>
+    <circle cx="512.0" cy="512.0" r="337.92" stroke-width="51.2"/>
+  </g>
+</svg>
