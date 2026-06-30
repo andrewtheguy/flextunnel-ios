@@ -131,11 +131,18 @@ final class BrowserModel {
     private static func bareHostURL(from text: String) -> URL? {
         guard !text.contains(" "), text.contains("."), Double(text) == nil else { return nil }
 
-        let scheme = text.hasSuffix(".onion") || text.contains(".onion/") ? "http" : "https"
-        guard let components = URLComponents(string: "\(scheme)://\(text)"),
+        // Parse with a default scheme so the host is isolated from any port or
+        // path, then pick the real scheme from the parsed host. Onion services
+        // are served over plain HTTP (the onion layer handles encryption /
+        // authentication; CA certs for .onion are rare), so any `.onion` host —
+        // regardless of case or port — uses http; everything else stays https.
+        guard var components = URLComponents(string: "https://\(text)"),
               let host = components.host,
               hostIsNavigable(host) else {
             return nil
+        }
+        if host.lowercased().hasSuffix(".onion") {
+            components.scheme = "http"
         }
         return components.url
     }

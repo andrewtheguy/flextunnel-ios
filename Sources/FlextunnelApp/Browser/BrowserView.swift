@@ -408,10 +408,6 @@ private struct AddressBarView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 40, height: 44)
                 .accessibilityHidden(true)
-        } else if tab?.siteSecurity == .notSecure {
-            Color.clear
-                .frame(width: 12, height: 44)
-                .accessibilityHidden(true)
         } else if let tab {
             Button {
                 showingSiteSecurity = true
@@ -563,16 +559,39 @@ private struct AddressDisplayParts {
             return
         }
 
-        let labels = displayHost.split(separator: ".")
-        guard labels.count > 2 else {
+        let labels = displayHost.split(separator: ".").map(String.init)
+        let registrableCount = Self.registrableLabelCount(for: labels)
+        guard labels.count > registrableCount else {
             subduedPrefix = ""
             primaryText = displayHost + portSuffix
             return
         }
 
-        subduedPrefix = labels.dropLast(2).joined(separator: ".") + "."
-        primaryText = labels.suffix(2).joined(separator: ".") + portSuffix
+        subduedPrefix = labels.dropLast(registrableCount).joined(separator: ".") + "."
+        primaryText = labels.suffix(registrableCount).joined(separator: ".") + portSuffix
     }
+
+    /// Number of trailing labels making up the registrable domain (the part to
+    /// emphasize). Defaults to 2 (`example.com`), but bumps to 3 for hosts under
+    /// a known multi-label public suffix (`example.co.uk`) so the suffix isn't
+    /// shown as the primary label. This is a pragmatic subset of the Public
+    /// Suffix List, not the whole thing — an unknown multi-label suffix falls
+    /// back to 2, which under-subdues a subdomain rather than misleading.
+    private static func registrableLabelCount(for labels: [String]) -> Int {
+        guard labels.count >= 3 else { return 2 }
+        let lastTwo = labels.suffix(2).joined(separator: ".").lowercased()
+        return multiLabelPublicSuffixes.contains(lastTwo) ? 3 : 2
+    }
+
+    private static let multiLabelPublicSuffixes: Set<String> = [
+        "co.uk", "org.uk", "gov.uk", "ac.uk", "me.uk", "net.uk", "sch.uk",
+        "com.au", "net.au", "org.au", "edu.au", "gov.au",
+        "co.jp", "ne.jp", "or.jp", "go.jp", "ac.jp",
+        "co.nz", "net.nz", "org.nz", "govt.nz",
+        "co.in", "net.in", "org.in", "gov.in", "ac.in",
+        "co.kr", "co.za", "com.br", "com.cn", "com.mx", "com.tr",
+        "com.sg", "com.hk", "com.tw", "co.il", "com.ar",
+    ]
 
     private static func displayHost(_ host: String) -> String {
         host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
