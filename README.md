@@ -55,8 +55,30 @@ DNS…)` vs `ATYP_IP (local DNS…)`).
    - *Server node id* — the flextunnel server's iroh endpoint id.
    - *Auth token* — a token the server accepts.
    - *Relay URLs* — optional hints; leave blank for iroh defaults.
+   - *Tunnel domains / CIDRs* — optional split-tunnel whitelist (see below);
+     leave blank to tunnel everything.
 
    Tap **Start proxy**, then open the proxied WebView and load a URL.
+
+## Split-tunnel whitelist
+
+iOS `WKWebsiteDataStore.proxyConfigurations` is global — every WebView request
+goes to the local SOCKS5 proxy, with no per-host routing. To make only some
+hosts tunnel, the decision is made in the Rust library, not the WebView: the
+on-device proxy tunnels whitelisted destinations and connects everything else
+directly.
+
+Enter a comma-separated **Tunnel domains** list (exact `example.com` or wildcard
+`*.example.com`, subdomains only) and/or **Tunnel CIDRs / IPs** (e.g.
+`10.0.0.0/8`, `192.168.1.5`) in the setup form. Both empty tunnels everything.
+These are passed straight through to the FFI config (`whitelist_domains` /
+`whitelist_cidrs`). Keep them in sync with the server's whitelist — the server
+rejects off-list tunnel requests as defense in depth. Run the server (or watch
+the app's logs via `RUST_LOG=debug`) to confirm which hosts tunnel vs. go direct.
+
+Off-list hosts are **always direct-connected** today (never blocked). A future
+client-side blocking mode is on the roadmap — see "Whitelist split-tunneling →
+Roadmap" in the [flextunnel README](../flextunnel/README.md).
 
 ## Verifying server-side DNS
 
