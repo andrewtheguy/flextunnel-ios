@@ -15,6 +15,9 @@ final class ProxyController: ObservableObject {
     @Published var healthy: Bool = false
     /// Non-secret settings for the currently running proxy, safe to show in UI.
     @Published private(set) var connectionSummary: ConnectionSummary?
+    /// Split-tunnel set the server pushed: domains/CIDRs routed through the
+    /// tunnel. Nil until the handshake completes; populated by polling.
+    @Published private(set) var forwardedRoutes: ForwardedRoutes?
 
     private var handle: OpaquePointer?
     private var healthTimer: Timer?
@@ -29,9 +32,19 @@ final class ProxyController: ObservableObject {
 
     struct ConnectionSummary {
         var serverNodeID: String
-        var requestedSocksPort: UInt16
         var relayURLs: [String]
         var dnsServer: String?
+    }
+
+    /// The tunnel's forwarding set as reported by the core. An empty domains +
+    /// cidrs while `connected` means the server runs no whitelist (everything is
+    /// tunneled).
+    struct ForwardedRoutes {
+        var connected: Bool
+        var domains: [String]
+        var cidrs: [String]
+
+        var isWhitelistActive: Bool { !domains.isEmpty || !cidrs.isEmpty }
     }
 
     init() {
@@ -85,7 +98,6 @@ final class ProxyController: ObservableObject {
 
         connectionSummary = ConnectionSummary(
             serverNodeID: s.serverNodeID,
-            requestedSocksPort: s.socksPort,
             relayURLs: s.relayURLs,
             dnsServer: nil)
         socksPort = UInt16(port)
@@ -104,6 +116,7 @@ final class ProxyController: ObservableObject {
         socksPort = nil
         healthy = false
         connectionSummary = nil
+        forwardedRoutes = nil
         if status != "error" { status = "idle" }
     }
 
@@ -115,8 +128,12 @@ final class ProxyController: ObservableObject {
     private func startHealthPolling() {
         healthTimer?.invalidate()
         healthTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkHealth() }
+            Task { @MainActor in
+                self?.checkHealth()
+                self?.refreshRoutes()
+            }
         }
+        refreshRoutes() // first read without waiting a full interval
     }
 
     private func checkHealth() {
@@ -134,6 +151,23 @@ final class ProxyController: ObservableObject {
         default:
             healthy = false
         }
+    }
+
+    /// Poll the core for the split-tunnel set learned during the handshake. The
+    /// whitelist rides the handshake response, so a generous buffer is used.
+    private func refreshRoutes() {
+        guard let handle else { return }
+        var buf = [CChar](repeating: 0, count: 64 * 1024)
+        guard flextunnel_routes(handle, &buf, buf.count) == 1 else { return }
+        guard
+            let data = String(cString: buf).data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+
+        forwardedRoutes = ForwardedRoutes(
+            connected: obj["connected"] as? Bool ?? false,
+            domains: obj["domains"] as? [String] ?? [],
+            cidrs: obj["cidrs"] as? [String] ?? [])
     }
 
     deinit {

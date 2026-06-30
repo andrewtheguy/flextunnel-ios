@@ -801,15 +801,15 @@ private struct TunnelStatusPopover: View {
                 VStack(alignment: .leading, spacing: 10) {
                     DetailRow("State", proxy.status)
                     DetailRow("Health", proxy.healthy ? "alive" : "down", valueColor: healthColor)
-                    DetailRow("Browser proxy", "SOCKS5 only")
                     DetailRow("Bound SOCKS", "127.0.0.1:\(proxy.socksPort ?? boundPort)")
 
                     if let summary = proxy.connectionSummary {
-                        DetailRow("Requested port", "\(summary.requestedSocksPort)")
                         DetailRow("Server node id", summary.serverNodeID, monospace: true)
                         DetailRow("Relay URLs", relayURLsText(summary.relayURLs))
                         DetailRow("DNS discovery", summary.dnsServer ?? "iroh discovery")
                     }
+
+                    forwardedRoutesRows
                 }
 
                 if let error = proxy.lastError {
@@ -826,6 +826,25 @@ private struct TunnelStatusPopover: View {
             .padding()
         }
         .frame(minWidth: 300, idealWidth: 340, maxHeight: 520)
+    }
+
+    /// What the tunnel forwards: the server's split-tunnel set. An active
+    /// whitelist lists the routed domains/CIDRs; an empty set means everything
+    /// is tunneled.
+    @ViewBuilder
+    private var forwardedRoutesRows: some View {
+        if let routes = proxy.forwardedRoutes, routes.connected {
+            if routes.isWhitelistActive {
+                if !routes.domains.isEmpty {
+                    DetailRow("Forwarded domains", routes.domains.joined(separator: "\n"), monospace: true)
+                }
+                if !routes.cidrs.isEmpty {
+                    DetailRow("Forwarded CIDRs", routes.cidrs.joined(separator: "\n"), monospace: true)
+                }
+            } else {
+                DetailRow("Forwarded", "All traffic (no whitelist)")
+            }
+        }
     }
 
     private var healthTitle: String {
