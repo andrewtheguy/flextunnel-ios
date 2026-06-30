@@ -13,6 +13,7 @@ struct BrowserView: View {
     @State private var showingTunnelStatus = false
     @State private var showingTabTray = false
     @State private var showBookmarkSaved = false
+    @State private var showingFind = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,6 +38,7 @@ struct BrowserView: View {
                     // and recreating the web view (which flickers).
                     WebView(tab.page)
                         .webViewBackForwardNavigationGestures(.enabled)
+                        .findNavigator(isPresented: $showingFind)
                         .overlay(alignment: .top) { progressBar(for: tab.page) }
                         .overlay {
                             if let warning = tab.certificateWarning {
@@ -62,6 +64,7 @@ struct BrowserView: View {
                 model: model,
                 proxyAvailable: proxyAvailable,
                 showingTabTray: $showingTabTray,
+                showingFind: $showingFind,
                 onDisconnect: stopAndDismiss,
                 onBookmarkSaved: flashBookmarkSaved)
         }
@@ -788,6 +791,7 @@ private struct BottomActionBar: View {
     @Bindable var model: BrowserModel
     let proxyAvailable: Bool
     @Binding var showingTabTray: Bool
+    @Binding var showingFind: Bool
     let onDisconnect: () -> Void
     let onBookmarkSaved: () -> Void
     @State private var showingLibrary = false
@@ -859,6 +863,11 @@ private struct BottomActionBar: View {
                         UIPasteboard.general.string = url.absoluteString
                     } label: {
                         Label("Copy URL", systemImage: "doc.on.doc")
+                    }
+                    Button {
+                        showingFind = true
+                    } label: {
+                        Label("Find in Page", systemImage: "magnifyingglass")
                     }
                 }
                 Divider()
