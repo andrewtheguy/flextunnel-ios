@@ -25,12 +25,6 @@ final class ProxyController: ObservableObject {
         var authToken: String
         var socksPort: UInt16
         var relayURLs: [String]
-        /// Domains to tunnel (the tunnel set). Exact ("example.com") or wildcard
-        /// ("*.example.com", subdomains only). Empty (with `cidrWhitelist`)
-        /// tunnels everything; otherwise off-list hosts connect directly.
-        var domainWhitelist: [String]
-        /// CIDRs / bare IPs to tunnel (matched against IP targets).
-        var cidrWhitelist: [String]
     }
 
     struct ConnectionSummary {
@@ -55,8 +49,6 @@ final class ProxyController: ObservableObject {
             "socks_port": Int(s.socksPort),
             "relay_urls": s.relayURLs,
             "dns_server": NSNull(),
-            "whitelist_domains": s.domainWhitelist,
-            "whitelist_cidrs": s.cidrWhitelist,
         ]
         guard
             let data = try? JSONSerialization.data(withJSONObject: configDict),
