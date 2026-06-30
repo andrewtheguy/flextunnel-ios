@@ -12,10 +12,14 @@ final class BrowserModel {
     var selectedID: BrowserTab.ID?
     var proxyIsAvailable = true
     private let websiteDataStore = WKWebsiteDataStore.nonPersistent()
+    private let certificateTrustStore = BrowserCertificateTrustStore()
 
     init(socksPort: UInt16) {
         self.socksPort = socksPort
-        let first = BrowserTab.make(socksPort: socksPort, websiteDataStore: websiteDataStore)
+        let first = BrowserTab.make(
+            socksPort: socksPort,
+            websiteDataStore: websiteDataStore,
+            certificateTrustStore: certificateTrustStore)
         self.tabs = [first]
         self.selectedID = first.id
     }
@@ -35,7 +39,10 @@ final class BrowserModel {
     @discardableResult
     func addTab() -> BrowserTab? {
         guard proxyIsAvailable else { return nil }
-        let tab = BrowserTab.make(socksPort: socksPort, websiteDataStore: websiteDataStore)
+        let tab = BrowserTab.make(
+            socksPort: socksPort,
+            websiteDataStore: websiteDataStore,
+            certificateTrustStore: certificateTrustStore)
         tabs.append(tab)
         selectedID = tab.id
         return tab

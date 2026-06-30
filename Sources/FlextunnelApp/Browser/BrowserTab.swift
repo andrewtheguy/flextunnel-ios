@@ -22,21 +22,29 @@ final class BrowserTab: Identifiable {
     /// leave WebKit without a committed URL.
     var addressText = ""
     var loadFailure: BrowserLoadFailure?
+    var certificateWarning: BrowserCertificateWarning?
 
     private let log = Logger(subsystem: "com.example.flextunnel", category: "webview")
+    private let navigationDecider: BrowserNavigationDecider
     private var lastAttemptedURL: URL?
+    private var certificateWarningContinuation: CheckedContinuation<Bool, Never>?
 
     /// Drains `page.navigations` for the tab's whole lifetime, independent of
     /// which tab is selected. Cancelled when the tab is closed.
     private var observationTask: Task<Void, Never>?
 
-    private init(page: WebPage) {
+    private init(page: WebPage, navigationDecider: BrowserNavigationDecider) {
         self.page = page
+        self.navigationDecider = navigationDecider
     }
 
     /// Build a tab whose `WebPage` is proxied through the loopback SOCKS5 listener.
     /// The shared non-persistent data store keeps all tabs in one ephemeral session.
-    static func make(socksPort: UInt16, websiteDataStore: WKWebsiteDataStore) -> BrowserTab {
+    static func make(
+        socksPort: UInt16,
+        websiteDataStore: WKWebsiteDataStore,
+        certificateTrustStore: BrowserCertificateTrustStore
+    ) -> BrowserTab {
         var config = WebPage.Configuration()
         config.websiteDataStore = websiteDataStore
 
@@ -45,7 +53,13 @@ final class BrowserTab: Identifiable {
             port: NWEndpoint.Port(rawValue: socksPort)!)
         config.websiteDataStore.proxyConfigurations = [ProxyConfiguration(socksv5Proxy: endpoint)]
 
-        let tab = BrowserTab(page: WebPage(configuration: config))
+        let navigationDecider = BrowserNavigationDecider(certificateTrustStore: certificateTrustStore)
+        let tab = BrowserTab(
+            page: WebPage(configuration: config, navigationDecider: navigationDecider),
+            navigationDecider: navigationDecider)
+        navigationDecider.certificateWarningHandler = { [weak tab] warning in
+            await tab?.requestCertificateWarning(warning) ?? false
+        }
         tab.observationTask = Task { [weak tab] in await tab?.observeNavigations() }
         return tab
     }
@@ -54,6 +68,7 @@ final class BrowserTab: Identifiable {
     func stopObserving() {
         observationTask?.cancel()
         observationTask = nil
+        resolveCertificateWarning(allow: false)
     }
 
     // MARK: - Derived state (reads WebPage's @Observable properties)
@@ -121,6 +136,12 @@ final class BrowserTab: Identifiable {
     func retryFailedLoad() {
         guard let url = loadFailure?.url ?? lastAttemptedURL else { return }
         load(url, displayAddress: addressText)
+    }
+
+    func resolveCertificateWarning(allow: Bool) {
+        certificateWarning = nil
+        certificateWarningContinuation?.resume(returning: allow)
+        certificateWarningContinuation = nil
     }
 
     /// Drains the page's navigation events for this tab's lifetime, logging
@@ -217,9 +238,80 @@ final class BrowserTab: Identifiable {
     private static func logHost(for url: URL?) -> String {
         url?.host() ?? "unknown"
     }
+
+    private func requestCertificateWarning(_ warning: BrowserCertificateWarning) async -> Bool {
+        certificateWarningContinuation?.resume(returning: false)
+        certificateWarningContinuation = nil
+
+        return await withCheckedContinuation { continuation in
+            certificateWarning = warning
+            certificateWarningContinuation = continuation
+        }
+    }
 }
 
 struct BrowserLoadFailure {
     let url: URL
     let message: String
+}
+
+struct BrowserCertificateWarning: Identifiable, Equatable {
+    let id = UUID()
+    let host: String
+    let port: Int
+
+    var displayHost: String {
+        port == 443 ? host : "\(host):\(port)"
+    }
+}
+
+@MainActor
+final class BrowserCertificateTrustStore {
+    private var trustedHosts = Set<String>()
+
+    func isTrusted(host: String, port: Int) -> Bool {
+        trustedHosts.contains(key(host: host, port: port))
+    }
+
+    func trust(host: String, port: Int) {
+        trustedHosts.insert(key(host: host, port: port))
+    }
+
+    private func key(host: String, port: Int) -> String {
+        "\(host.lowercased()):\(port)"
+    }
+}
+
+@MainActor
+final class BrowserNavigationDecider: WebPage.NavigationDeciding {
+    var certificateWarningHandler: ((BrowserCertificateWarning) async -> Bool)?
+
+    private let certificateTrustStore: BrowserCertificateTrustStore
+
+    init(certificateTrustStore: BrowserCertificateTrustStore) {
+        self.certificateTrustStore = certificateTrustStore
+    }
+
+    func decideAuthenticationChallengeDisposition(
+        for challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let serverTrust = challenge.protectionSpace.serverTrust else {
+            return (.performDefaultHandling, nil)
+        }
+
+        let host = challenge.protectionSpace.host
+        let port = challenge.protectionSpace.port
+        if certificateTrustStore.isTrusted(host: host, port: port) {
+            return (.useCredential, URLCredential(trust: serverTrust))
+        }
+
+        let warning = BrowserCertificateWarning(host: host, port: port)
+        guard await certificateWarningHandler?(warning) == true else {
+            return (.cancelAuthenticationChallenge, nil)
+        }
+
+        certificateTrustStore.trust(host: host, port: port)
+        return (.useCredential, URLCredential(trust: serverTrust))
+    }
 }

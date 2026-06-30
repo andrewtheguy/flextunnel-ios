@@ -57,6 +57,20 @@ struct BrowserView: View {
         .fullScreenCover(isPresented: $showingTabTray) {
             TabTrayView(model: model)
         }
+        .alert("Insecure Connection", isPresented: certificateWarningIsPresented) {
+            Button("Cancel", role: .cancel) {
+                model.selectedTab?.resolveCertificateWarning(allow: false)
+            }
+            Button("Continue", role: .destructive) {
+                model.selectedTab?.resolveCertificateWarning(allow: true)
+            }
+        } message: {
+            if let warning = model.selectedTab?.certificateWarning {
+                Text("The certificate for \(warning.displayHost) cannot be verified. Continue only if you trust this server.")
+            } else {
+                Text("")
+            }
+        }
         .onAppear { enforceProxyAvailability() }
         .onChange(of: proxy.healthy) { enforceProxyAvailability() }
         .onChange(of: proxy.socksPort) { enforceProxyAvailability() }
@@ -84,6 +98,16 @@ struct BrowserView: View {
             return .red
         }
         return .secondary
+    }
+
+    private var certificateWarningIsPresented: Binding<Bool> {
+        Binding {
+            model.selectedTab?.certificateWarning != nil
+        } set: { isPresented in
+            if !isPresented {
+                model.selectedTab?.resolveCertificateWarning(allow: false)
+            }
+        }
     }
 
     private func enforceProxyAvailability() {
