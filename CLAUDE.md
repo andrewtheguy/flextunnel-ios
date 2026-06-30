@@ -1,4 +1,5 @@
 - strict no backward compatibility
 - make change on sibling project ../flextunnel, which is the library used by this project, if needed 
 - target iOS 26 unless the webkit is downgraded to WKWebView
-- regenerate the project from project.yml after code changes
+- regenerate the project from project.yml after code changes (`xcodegen generate`)
+- build/verify with an arm64 iOS 26 simulator pinned, e.g. `xcodebuild -project Flextunnel.xcodeproj -scheme FlextunnelApp -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.2' build` — the vendored libflextunnel.xcframework is arm64-only, so `-sdk iphonesimulator` with a generic destination picks x86_64 and fails to link
