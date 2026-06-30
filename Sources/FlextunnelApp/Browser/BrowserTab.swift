@@ -59,7 +59,8 @@ final class BrowserTab: Identifiable {
         socksPort: UInt16,
         websiteDataStore: WKWebsiteDataStore,
         certificateTrustStore: BrowserCertificateTrustStore,
-        library: BrowserLibrary
+        library: BrowserLibrary,
+        downloads: BrowserDownloadManager
     ) -> BrowserTab {
         var config = WebPage.Configuration()
         config.websiteDataStore = websiteDataStore
@@ -77,6 +78,9 @@ final class BrowserTab: Identifiable {
             library: library)
         navigationDecider.certificateWarningHandler = { [weak tab] warning in
             await tab?.requestCertificateWarning(warning) ?? false
+        }
+        navigationDecider.downloadHandler = { request, suggestedFilename in
+            Task { await downloads.download(request, suggestedFilename: suggestedFilename) }
         }
         tab.observationTask = Task { [weak tab] in await tab?.observeNavigations() }
         return tab
@@ -264,6 +268,9 @@ final class BrowserTab: Identifiable {
     private func handleNavigationError(_ error: Error) {
         let nsError = underlyingNSError(from: error)
         guard nsError.code != NSURLErrorCancelled else { return }
+        // A navigation we cancelled to hand off as a download reports a policy
+        // interruption — not a real failure, so don't show the error screen.
+        if nsError.domain == "WebKitErrorDomain" && nsError.code == 102 { return }
 
         let attemptedURL = failingURL(from: error) ?? lastAttemptedURL ?? page.url
         let message = Self.userFacingMessage(for: nsError)
@@ -385,11 +392,39 @@ final class BrowserCertificateTrustStore {
 @MainActor
 final class BrowserNavigationDecider: WebPage.NavigationDeciding {
     var certificateWarningHandler: ((BrowserCertificateWarning) async -> Bool)?
+    /// Invoked with the request (and any server-suggested filename) when a
+    /// navigation turns out to be a download. iOS 26's `WebPage` can't deliver
+    /// the download itself, so we cancel the navigation and fetch it separately.
+    var downloadHandler: ((URLRequest, String?) -> Void)?
 
     private let certificateTrustStore: BrowserCertificateTrustStore
 
     init(certificateTrustStore: BrowserCertificateTrustStore) {
         self.certificateTrustStore = certificateTrustStore
+    }
+
+    func decidePolicy(
+        for action: WebPage.NavigationAction,
+        preferences: inout WebPage.NavigationPreferences
+    ) async -> WKNavigationActionPolicy {
+        if action.shouldPerformDownload {
+            downloadHandler?(action.request, nil)
+            return .cancel
+        }
+        return .allow
+    }
+
+    func decidePolicy(for response: WebPage.NavigationResponse) async -> WKNavigationResponsePolicy {
+        // A response WebKit can't display is a download. Cancel here (otherwise
+        // the navigation hangs, since WebPage has no download delegate) and hand
+        // it to the proxied downloader.
+        guard response.canShowMimeType else {
+            if let url = response.response.url {
+                downloadHandler?(URLRequest(url: url), response.response.suggestedFilename)
+            }
+            return .cancel
+        }
+        return .allow
     }
 
     func decideAuthenticationChallengeDisposition(

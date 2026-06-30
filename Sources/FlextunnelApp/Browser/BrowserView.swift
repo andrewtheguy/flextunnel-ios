@@ -73,6 +73,22 @@ struct BrowserView: View {
                 BookmarkSavedToast()
                     .padding(.bottom, 76)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let status = model.downloads.status {
+                DownloadStatusToast(text: status)
+                    .padding(.bottom, 76)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: model.downloads.status)
+        .sheet(item: Bindable(model.downloads).readyFile) { file in
+            BrowserShareSheet(url: file.url, activities: [])
+                .ignoresSafeArea()
+        }
+        .onChange(of: model.downloads.status) {
+            // Clear a terminal status ("Download failed") after a moment.
+            guard model.downloads.status == "Download failed" else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                if model.downloads.status == "Download failed" { model.downloads.status = nil }
             }
         }
         .fullScreenCover(isPresented: $showingTabTray) {
@@ -154,6 +170,31 @@ private struct BookmarkSavedToast: View {
             .padding(.vertical, 10)
             .background(.green, in: Capsule())
             .shadow(radius: 6, y: 2)
+    }
+}
+
+/// Transient status shown while a download is in progress or after it fails.
+private struct DownloadStatusToast: View {
+    let text: String
+
+    private var failed: Bool { text == "Download failed" }
+
+    var body: some View {
+        Label {
+            Text(text)
+        } icon: {
+            if failed {
+                Image(systemName: "exclamationmark.triangle.fill")
+            } else {
+                ProgressView().controlSize(.small).tint(.white)
+            }
+        }
+        .font(.subheadline.weight(.medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(failed ? Color.red : Color.accentColor, in: Capsule())
+        .shadow(radius: 6, y: 2)
     }
 }
 

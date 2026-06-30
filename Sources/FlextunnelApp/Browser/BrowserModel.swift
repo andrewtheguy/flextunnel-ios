@@ -9,6 +9,7 @@ import WebKit
 final class BrowserModel {
     let socksPort: UInt16
     let library: BrowserLibrary
+    let downloads: BrowserDownloadManager
     private(set) var tabs: [BrowserTab]
     var selectedID: BrowserTab.ID?
     var proxyIsAvailable = true
@@ -18,11 +19,14 @@ final class BrowserModel {
     init(socksPort: UInt16, library: BrowserLibrary) {
         self.socksPort = socksPort
         self.library = library
+        let downloads = BrowserDownloadManager(socksPort: socksPort, websiteDataStore: websiteDataStore)
+        self.downloads = downloads
         let first = BrowserTab.make(
             socksPort: socksPort,
             websiteDataStore: websiteDataStore,
             certificateTrustStore: certificateTrustStore,
-            library: library)
+            library: library,
+            downloads: downloads)
         self.tabs = [first]
         self.selectedID = first.id
     }
@@ -46,7 +50,8 @@ final class BrowserModel {
             socksPort: socksPort,
             websiteDataStore: websiteDataStore,
             certificateTrustStore: certificateTrustStore,
-            library: library)
+            library: library,
+            downloads: downloads)
         tabs.append(tab)
         selectedID = tab.id
         return tab
