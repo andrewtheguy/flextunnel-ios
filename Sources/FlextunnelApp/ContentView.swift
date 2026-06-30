@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var authToken = ""
     @State private var relayURLs = ""
     @State private var socksPortText = "18080"
+    @AppStorage("tunnelDomains") private var tunnelDomains = ""
+    @AppStorage("tunnelCIDRs") private var tunnelCIDRs = ""
     @State private var browserModel: BrowserModel?
 
     var body: some View {
@@ -33,6 +35,17 @@ struct ContentView: View {
                             .foregroundStyle(.red)
                             .font(.footnote)
                     }
+                }
+
+                Section {
+                    TextField("Tunnel domains (comma-separated, optional)", text: $tunnelDomains)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    TextField("Tunnel CIDRs / IPs (comma-separated, optional)", text: $tunnelCIDRs)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                } header: {
+                    Text("Split tunnel")
+                } footer: {
+                    Text("Leave empty to tunnel everything. Otherwise only matching destinations are tunneled and the rest connect directly. Domains are exact (example.com) or wildcard (*.example.com, subdomains only). Keep in sync with the server.")
                 }
 
                 Section {
@@ -108,7 +121,9 @@ struct ContentView: View {
             serverNodeID: trimmedServerNodeID,
             authToken: trimmedAuthToken,
             socksPort: parsedSocksPort ?? 18080,
-            relayURLs: splitCSV(relayURLs)
+            relayURLs: splitCSV(relayURLs),
+            domainWhitelist: splitCSV(tunnelDomains),
+            cidrWhitelist: splitCSV(tunnelCIDRs)
         )
     }
 
