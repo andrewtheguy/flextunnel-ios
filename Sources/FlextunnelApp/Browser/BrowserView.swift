@@ -3,9 +3,9 @@ import UIKit
 import WebKit
 
 /// Full-screen browser chrome over proxied `WebPage`s. The location surface
-/// follows Firefox iOS: leading page actions, site identity/search, URL text,
-/// and stop/reload as the trailing page action. Tunnel status is this app's
-/// custom leading page action inside that standard browser surface.
+/// follows Firefox iOS: site identity/search, URL text, and stop/reload as the
+/// trailing page action. Tunnel status is this app's custom action outside that
+/// standard browser surface.
 struct BrowserView: View {
     @State var model: BrowserModel
     @ObservedObject var proxy: ProxyController
@@ -202,7 +202,7 @@ private struct BrowserLoadFailureView: View {
     }
 }
 
-/// Top chrome: Firefox-style location surface plus app-specific tunnel status.
+/// Top chrome: app-specific tunnel status plus Firefox-style location surface.
 private struct AddressBarView: View {
     @Bindable var model: BrowserModel
     let proxyAvailable: Bool
@@ -215,9 +215,10 @@ private struct AddressBarView: View {
 
     var body: some View {
         let tab = model.selectedTab
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
+            tunnelStatusButton
+
             HStack(spacing: 0) {
-                tunnelStatusButton
                 leadingLocationButton(for: tab)
 
                 ZStack(alignment: .leading) {
@@ -314,7 +315,6 @@ private struct AddressBarView: View {
             } label: {
                 Image(systemName: siteSecurityIcon(for: tab.siteSecurity))
                     .font(.system(size: 16, weight: .semibold))
-                    .symbolRenderingMode(tab.siteSecurity == .notSecure ? .multicolor : .monochrome)
                     .foregroundStyle(siteSecurityColor(for: tab.siteSecurity))
                     .frame(width: 40, height: 44)
             }
@@ -370,11 +370,11 @@ private struct AddressBarView: View {
     private func siteSecurityIcon(for security: BrowserSiteSecurity?) -> String {
         switch security {
         case .secure:
-            return "checkmark.shield.fill"
+            return "lock.fill"
         case .notSecure:
-            return "shield.slash.fill"
+            return "lock.open.fill"
         case .certificateException:
-            return "exclamationmark.shield.fill"
+            return "lock.slash.fill"
         case nil:
             return "magnifyingglass"
         }
@@ -546,11 +546,11 @@ private struct SiteSecurityPopover: View {
     private var icon: String {
         switch tab.siteSecurity {
         case .secure:
-            return "checkmark.shield.fill"
+            return "lock.fill"
         case .notSecure:
-            return "shield.slash.fill"
+            return "lock.open.fill"
         case .certificateException:
-            return "exclamationmark.shield.fill"
+            return "lock.slash.fill"
         case nil:
             return "info.circle"
         }

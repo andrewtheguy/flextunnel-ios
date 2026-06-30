@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Observation
+import Security
 import WebKit
 import os.log
 
@@ -341,6 +342,10 @@ final class BrowserNavigationDecider: WebPage.NavigationDeciding {
 
         let host = challenge.protectionSpace.host
         let port = challenge.protectionSpace.port
+        if Self.serverTrustIsValid(serverTrust) {
+            return (.performDefaultHandling, nil)
+        }
+
         if certificateTrustStore.isTrusted(host: host, port: port) {
             return (.useCredential, URLCredential(trust: serverTrust))
         }
@@ -352,5 +357,9 @@ final class BrowserNavigationDecider: WebPage.NavigationDeciding {
 
         certificateTrustStore.trust(host: host, port: port)
         return (.useCredential, URLCredential(trust: serverTrust))
+    }
+
+    private static func serverTrustIsValid(_ serverTrust: SecTrust) -> Bool {
+        SecTrustEvaluateWithError(serverTrust, nil)
     }
 }
