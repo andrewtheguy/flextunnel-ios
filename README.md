@@ -1,13 +1,28 @@
 # flextunnel-ios (POC)
 
-A minimal iOS app that routes a `WKWebView` through flextunnel's SOCKS5 tunnel
-**without a system-proxy change and without a VPN / Network Extension**, working
-only while the app is foregrounded.
+A **private-network access browser** for iOS. It reaches private resources
+through flextunnel's SOCKS5-over-QUIC tunnel **without a system-proxy change and
+without a VPN / Network Extension**, working while the app is foregrounded. It's
+split-tunnel by default (traffic to non-whitelisted resources bypasses the
+proxy and connects directly), with the option to route everything through the
+tunnel. It behaves like a mainstream browser — **not** a privacy/anonymity
+browser.
 
 It links `libflextunnel.a` (the Rust core, built from the sibling `../flextunnel`
 repo) directly into the app. The core runs an in-process loopback SOCKS5 listener
-over an iroh QUIC connection; the web view is pointed at it via
-`WKWebsiteDataStore.proxyConfigurations` (iOS 17+).
+over an iroh QUIC connection; the SwiftUI `WebView` (iOS 26 `WebPage`) is pointed
+at it via `WKWebsiteDataStore.proxyConfigurations` (iOS 17+).
+
+## Browser features
+
+Beyond loading a URL, it's a real browser: multiple tabs, an address bar with
+site-security indicator, back/forward + home, find-in-page, and certificate-trust
+warnings. Bookmarks and history persist across launches in protected files in
+the app container (Data Protection + excluded from backups), and web sessions
+(cookies/logins/cache) persist via the default `WKWebsiteDataStore`. Downloads
+are fetched through the tunnel and shown in a downloads panel with a confirmation
+prompt and QuickLook preview; the download **list** is intentionally session-only
+to reduce clutter.
 
 ## Why no VPN
 
@@ -18,11 +33,11 @@ personal team works, and it runs in the Simulator too.
 
 ## The DNS goal (server-side resolution)
 
-SOCKS5 sends the **hostname** (ATYP_DOMAIN) to the proxy, so DNS is resolved on
-the flextunnel **server**, not the device. This is the same mechanism that lets
-Onion Browser resolve `.onion` names through Tor's local SOCKS proxy. The core
-logs each CONNECT's address type so you can confirm it (`ATYP_DOMAIN (remote
-DNS…)` vs `ATYP_IP (local DNS…)`).
+SOCKS5 sends the **hostname** (ATYP_DOMAIN) to the proxy, so DNS for tunneled
+hosts is resolved on the flextunnel **server**, not the device — the same SOCKS
+remote-DNS mechanism Onion Browser uses to resolve `.onion` through Tor's local
+proxy. The core logs each CONNECT's address type so you can confirm it
+(`ATYP_DOMAIN (remote DNS…)` vs `ATYP_IP (local DNS…)`).
 
 ## Prerequisites
 
@@ -33,7 +48,7 @@ DNS…)` vs `ATYP_IP (local DNS…)`).
 ## Build & run
 
 1. **Build the Rust static library** (from the sibling repo). This stages
-   `vendor/libflextunnel.a` and `vendor/flextunnel.h` here automatically:
+   `vendor/libflextunnel.xcframework` and `vendor/flextunnel.h` here automatically:
 
    ```sh
    cd ../flextunnel
@@ -53,45 +68,44 @@ DNS…)` vs `ATYP_IP (local DNS…)`).
 
 4. **Run** on a device or the Simulator. Enter:
    - *Server node id* — the flextunnel server's iroh endpoint id.
-   - *Auth token* — a token the server accepts.
+   - *Auth token* — a token the server accepts (stored in the Keychain).
    - *Relay URLs* — optional hints; leave blank for iroh defaults.
-   - *Tunnel domains / CIDRs* — optional split-tunnel whitelist (see below);
-     leave blank to tunnel everything.
+   - *SOCKS bind port* — the loopback port the core binds.
 
-   Tap **Start proxy**, then open the proxied WebView and load a URL.
+   Tap **Start proxy**, then browse. The **Tunnel status** button shows health,
+   the bound port, and the active split-tunnel set.
 
 ## Split-tunnel whitelist
 
 iOS `WKWebsiteDataStore.proxyConfigurations` is global — every WebView request
-goes to the local SOCKS5 proxy, with no per-host routing. To make only some
-hosts tunnel, the decision is made in the Rust library, not the WebView: the
-on-device proxy tunnels whitelisted destinations and connects everything else
-directly.
+goes to the local SOCKS5 proxy, with no per-host routing. So the routing decision
+is made in the Rust library, not the WebView: the on-device proxy tunnels
+whitelisted destinations and connects everything else directly.
 
-Enter a comma-separated **Tunnel domains** list (exact `example.com` or wildcard
-`*.example.com`, subdomains only) and/or **Tunnel CIDRs / IPs** (e.g.
-`10.0.0.0/8`, `192.168.1.5`) in the setup form. Both empty tunnels everything.
-These are passed straight through to the FFI config (`whitelist_domains` /
-`whitelist_cidrs`). Keep them in sync with the server's whitelist — the server
-rejects off-list tunnel requests as defense in depth. Run the server (or watch
-the app's logs via `RUST_LOG=debug`) to confirm which hosts tunnel vs. go direct.
-
-Off-list hosts are **always direct-connected** today (never blocked). A future
-client-side blocking mode is on the roadmap — see "Whitelist split-tunneling →
-Roadmap" in the [flextunnel README](../flextunnel/README.md).
+The whitelist is **defined on the server** and pushed to the client during the
+handshake; the app surfaces it under **Tunnel status** (forwarded domains/CIDRs,
+or "All traffic" when the server runs no whitelist). Off-list hosts are **always
+direct-connected** today (never blocked). A future client-side blocking mode is
+on the roadmap — see "Whitelist split-tunneling → Roadmap" in the
+[flextunnel README](../flextunnel/README.md).
 
 ## Verifying server-side DNS
 
-Run the flextunnel **server** with `RUST_LOG=info`. Browsing should log
-`ATYP_DOMAIN (remote DNS, resolved on server)` per CONNECT — **not** `ATYP_IP`.
-For a definitive check, add a hostname that only resolves on the server's network
-(e.g. in the server host's `/etc/hosts`) and load it from the app; if it loads,
-DNS happened on the server. (If you instead see `ATYP_IP`, Network framework
-pre-resolved locally — fall back to an HTTP-CONNECT proxy front-end.)
+Run the flextunnel **server** with `RUST_LOG=info`. Browsing a tunneled host
+should log `ATYP_DOMAIN (remote DNS, resolved on server)` per CONNECT — **not**
+`ATYP_IP`. For a definitive check, add a hostname that only resolves on the
+server's network (e.g. in the server host's `/etc/hosts`) and load it from the
+app; if it loads, DNS happened on the server. (If you instead see `ATYP_IP`,
+Network framework pre-resolved locally — fall back to an HTTP-CONNECT proxy
+front-end.)
 
 ## Notes
 
-- `WKWebsiteDataStore.proxyConfigurations` requires **iOS 17+** (the deployment
-  target here). WKWebView could not be proxied at runtime before iOS 17.
+- Targets **iOS 26**: the browser uses the SwiftUI `WebView` / `WebPage` API.
+  (`WKWebsiteDataStore.proxyConfigurations`, the runtime proxy hook, requires
+  iOS 17+.)
+- The vendored `libflextunnel.xcframework` is arm64-only; build/verify against a
+  pinned arm64 iOS 26 Simulator, e.g. `-destination 'platform=iOS
+  Simulator,name=iPhone 17,OS=26.2'`.
 - The `.xcodeproj` and the staged `vendor/` artifacts are git-ignored on purpose;
   regenerate/rebuild them as above.
