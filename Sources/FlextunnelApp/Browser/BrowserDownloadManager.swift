@@ -92,14 +92,36 @@ final class BrowserDownloadManager: NSObject, URLSessionDownloadDelegate {
         Self.resetDownloadsDirectory()
     }
 
-    @ObservationIgnored private lazy var session: URLSession = {
+    // Backing store so teardown can invalidate the session (releasing the
+    // delegate retain `URLSession(delegate:)` holds) without force-creating one.
+    @ObservationIgnored private var _session: URLSession?
+    private var session: URLSession {
+        if let _session { return _session }
         let config = URLSessionConfiguration.ephemeral
         let endpoint = NWEndpoint.hostPort(
             host: "127.0.0.1",
             port: NWEndpoint.Port(rawValue: socksPort)!)
         config.proxyConfigurations = [ProxyConfiguration(socksv5Proxy: endpoint)]
-        return URLSession(configuration: config, delegate: self, delegateQueue: .main)
-    }()
+        let created = URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        _session = created
+        return created
+    }
+
+    /// Cancels in-flight transfers, invalidates the session (so it stops
+    /// retaining this delegate), and clears download state. Called when the
+    /// owning `BrowserModel` shuts down. Idempotent.
+    func shutdown() {
+        _session?.invalidateAndCancel()
+        _session = nil
+        for item in items {
+            if case .finished(let url) = item.state {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+        items.removeAll()
+        pendingPrompt = nil
+        toast = nil
+    }
 
     // MARK: - Confirmation
 

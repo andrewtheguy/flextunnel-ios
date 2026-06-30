@@ -83,6 +83,7 @@ final class BrowserModel {
 
     func stopAll() {
         tabs.forEach { $0.stop() }
+        downloads.shutdown()
         proxyIsAvailable = false
     }
 
