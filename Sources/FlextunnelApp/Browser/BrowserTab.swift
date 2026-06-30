@@ -312,6 +312,9 @@ struct BrowserCertificateWarning: Identifiable, Equatable {
     let id = UUID()
     let host: String
     let port: Int
+    /// Why trust evaluation failed (e.g. "certificate has expired"), surfaced
+    /// in the interstitial so the user can see the cause like Chrome does.
+    let reason: String
 
     var displayHost: String {
         port == 443 ? host : "\(host):\(port)"
@@ -355,7 +358,7 @@ final class BrowserNavigationDecider: WebPage.NavigationDeciding {
 
         let host = challenge.protectionSpace.host
         let port = challenge.protectionSpace.port
-        if Self.serverTrustIsValid(serverTrust) {
+        guard let reason = Self.serverTrustFailureReason(serverTrust) else {
             return (.performDefaultHandling, nil)
         }
 
@@ -363,7 +366,7 @@ final class BrowserNavigationDecider: WebPage.NavigationDeciding {
             return (.useCredential, URLCredential(trust: serverTrust))
         }
 
-        let warning = BrowserCertificateWarning(host: host, port: port)
+        let warning = BrowserCertificateWarning(host: host, port: port, reason: reason)
         guard await certificateWarningHandler?(warning) == true else {
             return (.cancelAuthenticationChallenge, nil)
         }
@@ -372,7 +375,17 @@ final class BrowserNavigationDecider: WebPage.NavigationDeciding {
         return (.useCredential, URLCredential(trust: serverTrust))
     }
 
-    private static func serverTrustIsValid(_ serverTrust: SecTrust) -> Bool {
-        SecTrustEvaluateWithError(serverTrust, nil)
+    /// Evaluates the server trust: nil when valid, otherwise a human-readable
+    /// reason (e.g. "certificate has expired", hostname mismatch) from the
+    /// trust evaluation error.
+    private static func serverTrustFailureReason(_ serverTrust: SecTrust) -> String? {
+        var error: CFError?
+        if SecTrustEvaluateWithError(serverTrust, &error) {
+            return nil
+        }
+        if let error {
+            return (error as Error).localizedDescription
+        }
+        return "The certificate could not be verified."
     }
 }

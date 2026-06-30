@@ -38,7 +38,12 @@ struct BrowserView: View {
                         .webViewBackForwardNavigationGestures(.enabled)
                         .overlay(alignment: .top) { progressBar(for: tab.page) }
                         .overlay {
-                            if let failure = tab.loadFailure {
+                            if let warning = tab.certificateWarning {
+                                BrowserCertificateWarningView(
+                                    warning: warning,
+                                    onProceed: { tab.resolveCertificateWarning(allow: true) },
+                                    onGoBack: { tab.resolveCertificateWarning(allow: false) })
+                            } else if let failure = tab.loadFailure {
                                 BrowserLoadFailureView(
                                     failure: failure,
                                     onRetry: { tab.retryFailedLoad() })
@@ -60,20 +65,6 @@ struct BrowserView: View {
         }
         .fullScreenCover(isPresented: $showingTabTray) {
             TabTrayView(model: model)
-        }
-        .alert("Insecure Connection", isPresented: certificateWarningIsPresented) {
-            Button("Cancel", role: .cancel) {
-                model.selectedTab?.resolveCertificateWarning(allow: false)
-            }
-            Button("Continue", role: .destructive) {
-                model.selectedTab?.resolveCertificateWarning(allow: true)
-            }
-        } message: {
-            if let warning = model.selectedTab?.certificateWarning {
-                Text("The certificate for \(warning.displayHost) cannot be verified. Continue only if you trust this server.")
-            } else {
-                Text("")
-            }
         }
         .onAppear { enforceProxyAvailability() }
         .onChange(of: proxy.healthy) { enforceProxyAvailability() }
@@ -102,16 +93,6 @@ struct BrowserView: View {
             return .red
         }
         return .secondary
-    }
-
-    private var certificateWarningIsPresented: Binding<Bool> {
-        Binding {
-            model.selectedTab?.certificateWarning != nil
-        } set: { isPresented in
-            if !isPresented {
-                model.selectedTab?.resolveCertificateWarning(allow: false)
-            }
-        }
     }
 
     private func enforceProxyAvailability() {
@@ -298,6 +279,58 @@ private struct BrowserLoadFailureView: View {
                 Label("Try Again", systemImage: "arrow.clockwise")
             }
             .buttonStyle(.borderedProminent)
+            .padding(.top, 4)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
+}
+
+/// Full-screen interstitial for an untrusted TLS certificate — Chrome-style:
+/// states the connection isn't private, shows the specific reason and host, and
+/// offers going back or proceeding anyway (which trusts the host for the
+/// session). Replaces a modal alert so it reads like the load-failure page.
+private struct BrowserCertificateWarningView: View {
+    let warning: BrowserCertificateWarning
+    let onProceed: () -> Void
+    let onGoBack: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.system(size: 42, weight: .light))
+                .foregroundStyle(.red)
+
+            Text("Your connection is not private")
+                .font(.title3.weight(.semibold))
+                .multilineTextAlignment(.center)
+
+            Text(warning.reason)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+                .frame(maxWidth: 320)
+
+            Text(warning.displayHost)
+                .font(.footnote.monospaced())
+                .foregroundStyle(.tertiary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+
+            VStack(spacing: 10) {
+                Button(action: onGoBack) {
+                    Text("Go Back").frame(maxWidth: 280)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button(role: .destructive, action: onProceed) {
+                    Text("Continue Anyway").frame(maxWidth: 280)
+                }
+                .buttonStyle(.bordered)
+            }
             .padding(.top, 4)
         }
         .padding(24)
