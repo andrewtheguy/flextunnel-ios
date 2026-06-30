@@ -20,8 +20,6 @@ struct BrowserView: View {
                 .webViewBackForwardNavigationGestures(.enabled)
                 .overlay(alignment: .top) { progressBar(for: tab.page) }
                 .overlay(alignment: .bottom) { errorBanner(for: tab) }
-                // Follow the selected tab: restart the navigation observer when it changes.
-                .task(id: tab.id) { await tab.observeNavigations() }
 
             Divider()
             BottomToolbarView(
@@ -154,16 +152,22 @@ private struct TabChip: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(tab.displayTitle)
-                .font(.footnote)
-                .lineLimit(1)
-                .frame(maxWidth: 140)
+            Button(action: onSelect) {
+                Text(tab.displayTitle)
+                    .font(.footnote)
+                    .lineLimit(1)
+                    .frame(maxWidth: 140)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
             if showClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .bold))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Close tab")
             }
         }
         .padding(.horizontal, 10)
@@ -171,8 +175,6 @@ private struct TabChip: View {
         .background(isSelected ? Color.accentColor.opacity(0.2) : Color(.secondarySystemBackground),
                     in: Capsule())
         .overlay(Capsule().strokeBorder(isSelected ? Color.accentColor : .clear))
-        .contentShape(Capsule())
-        .onTapGesture(perform: onSelect)
     }
 }
 

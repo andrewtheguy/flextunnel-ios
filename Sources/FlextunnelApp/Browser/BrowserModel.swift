@@ -40,6 +40,7 @@ final class BrowserModel {
     /// tab was active.
     func closeTab(_ tab: BrowserTab) {
         guard tabs.count > 1, let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        tab.stopObserving()
         tabs.remove(at: index)
         if selectedID == tab.id {
             let neighbor = tabs[min(index, tabs.count - 1)]

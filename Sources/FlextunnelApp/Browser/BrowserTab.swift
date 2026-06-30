@@ -23,6 +23,10 @@ final class BrowserTab: Identifiable {
 
     private let log = Logger(subsystem: "com.example.flextunnel", category: "webview")
 
+    /// Drains `page.navigations` for the tab's whole lifetime, independent of
+    /// which tab is selected. Cancelled when the tab is closed.
+    private var observationTask: Task<Void, Never>?
+
     private init(page: WebPage) {
         self.page = page
     }
@@ -38,7 +42,15 @@ final class BrowserTab: Identifiable {
             port: NWEndpoint.Port(rawValue: socksPort)!)
         config.websiteDataStore.proxyConfigurations = [ProxyConfiguration(socksv5Proxy: endpoint)]
 
-        return BrowserTab(page: WebPage(configuration: config))
+        let tab = BrowserTab(page: WebPage(configuration: config))
+        tab.observationTask = Task { [weak tab] in await tab?.observeNavigations() }
+        return tab
+    }
+
+    /// Cancels the lifetime navigation observer. Called when the tab is closed.
+    func stopObserving() {
+        observationTask?.cancel()
+        observationTask = nil
     }
 
     // MARK: - Derived state (reads WebPage's @Observable properties)
@@ -82,9 +94,9 @@ final class BrowserTab: Identifiable {
     }
 
     /// Drains the page's navigation events for this tab's lifetime, logging
-    /// outcomes and recording failures into `lastError`. Driven from the view via
-    /// `.task(id:)` so it follows the selected tab.
-    func observeNavigations() async {
+    /// outcomes and recording failures into `lastError`. Started in `make` and
+    /// cancelled in `stopObserving`, so it runs regardless of tab selection.
+    private func observeNavigations() async {
         do {
             for try await _ in page.navigations {
                 lastError = nil
