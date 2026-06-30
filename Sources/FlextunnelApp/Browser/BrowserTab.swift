@@ -79,8 +79,8 @@ final class BrowserTab: Identifiable {
         navigationDecider.certificateWarningHandler = { [weak tab] warning in
             await tab?.requestCertificateWarning(warning) ?? false
         }
-        navigationDecider.downloadHandler = { request, suggestedFilename in
-            Task { await downloads.startDownload(request, suggestedFilename: suggestedFilename) }
+        navigationDecider.downloadHandler = { request, response in
+            Task { await downloads.requestDownload(request, response: response) }
         }
         tab.observationTask = Task { [weak tab] in await tab?.observeNavigations() }
         return tab
@@ -392,10 +392,11 @@ final class BrowserCertificateTrustStore {
 @MainActor
 final class BrowserNavigationDecider: WebPage.NavigationDeciding {
     var certificateWarningHandler: ((BrowserCertificateWarning) async -> Bool)?
-    /// Invoked with the request (and any server-suggested filename) when a
-    /// navigation turns out to be a download. iOS 26's `WebPage` can't deliver
-    /// the download itself, so we cancel the navigation and fetch it separately.
-    var downloadHandler: ((URLRequest, String?) -> Void)?
+    /// Invoked with the request (and the navigation response when one exists)
+    /// when a navigation turns out to be a download. iOS 26's `WebPage` can't
+    /// deliver the download itself, so we cancel the navigation and fetch it
+    /// separately.
+    var downloadHandler: ((URLRequest, URLResponse?) -> Void)?
 
     private let certificateTrustStore: BrowserCertificateTrustStore
 
@@ -420,7 +421,7 @@ final class BrowserNavigationDecider: WebPage.NavigationDeciding {
         // it to the proxied downloader.
         guard response.canShowMimeType else {
             if let url = response.response.url {
-                downloadHandler?(URLRequest(url: url), response.response.suggestedFilename)
+                downloadHandler?(URLRequest(url: url), response.response)
             }
             return .cancel
         }

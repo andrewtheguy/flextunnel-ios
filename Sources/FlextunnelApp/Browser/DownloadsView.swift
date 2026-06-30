@@ -50,7 +50,7 @@ struct DownloadsView: View {
     @ViewBuilder
     private func row(_ item: DownloadItem) -> some View {
         let content = HStack(spacing: 12) {
-            Image(systemName: Self.icon(for: item.filename))
+            Image(systemName: downloadFileIcon(item.filename))
                 .font(.title3)
                 .foregroundStyle(.tint)
                 .frame(width: 28)
@@ -127,16 +127,64 @@ struct DownloadsView: View {
         return ByteCountFormatter.string(fromByteCount: size ?? 0, countStyle: .file)
     }
 
-    private static func icon(for filename: String) -> String {
-        switch (filename as NSString).pathExtension.lowercased() {
-        case "pdf": return "doc.richtext"
-        case "zip", "gz", "tar", "7z", "rar": return "doc.zipper"
-        case "jpg", "jpeg", "png", "gif", "heic", "webp", "bmp", "tiff": return "photo"
-        case "mp4", "mov", "m4v", "avi", "mkv", "webm": return "film"
-        case "mp3", "wav", "aac", "m4a", "flac", "ogg": return "music.note"
-        case "txt", "md", "rtf", "csv", "json", "xml", "log": return "doc.text"
-        case "dmg", "pkg", "app": return "shippingbox"
-        default: return "doc"
+}
+
+/// Firefox-style download confirmation card: the file (icon, name, size · host)
+/// with Cancel / Download actions, shown as a compact bottom sheet.
+struct DownloadPromptView: View {
+    let prompt: DownloadPrompt
+    let onDownload: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 24) {
+            HStack(spacing: 14) {
+                Image(systemName: downloadFileIcon(prompt.filename))
+                    .font(.system(size: 34))
+                    .foregroundStyle(.tint)
+                    .frame(width: 44)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(prompt.filename)
+                        .font(.headline)
+                        .lineLimit(2)
+                    Text(prompt.detailText)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 12) {
+                Button(role: .cancel, action: onCancel) {
+                    Text("Cancel").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button(action: onDownload) {
+                    Label("Download", systemImage: "arrow.down.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .controlSize(.large)
         }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
+/// SF Symbol for a downloaded file, chosen by extension.
+func downloadFileIcon(_ filename: String) -> String {
+    switch (filename as NSString).pathExtension.lowercased() {
+    case "pdf": return "doc.richtext"
+    case "zip", "gz", "tar", "7z", "rar": return "doc.zipper"
+    case "jpg", "jpeg", "png", "gif", "heic", "webp", "bmp", "tiff": return "photo"
+    case "mp4", "mov", "m4v", "avi", "mkv", "webm": return "film"
+    case "mp3", "wav", "aac", "m4a", "flac", "ogg": return "music.note"
+    case "txt", "md", "rtf", "csv", "json", "xml", "log": return "doc.text"
+    case "dmg", "pkg", "app": return "shippingbox"
+    default: return "doc"
     }
 }

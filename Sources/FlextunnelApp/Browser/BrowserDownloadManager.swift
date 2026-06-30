@@ -40,6 +40,29 @@ final class DownloadItem: Identifiable {
     }
 }
 
+/// A download awaiting the user's confirmation, with metadata gathered up front
+/// (from the navigation response, or a HEAD request) so we can show what's about
+/// to be downloaded and how big it is.
+struct DownloadPrompt: Identifiable, Equatable {
+    let id = UUID()
+    let request: URLRequest
+    let filename: String
+    /// Expected size in bytes; ≤ 0 when unknown.
+    let byteCount: Int64
+    let host: String?
+
+    var sizeText: String {
+        byteCount > 0 ? ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
+                      : "Unknown size"
+    }
+
+    /// Action-sheet message: size, then the source host when known.
+    var detailText: String {
+        guard let host else { return sizeText }
+        return "\(sizeText) · \(host)"
+    }
+}
+
 /// Firefox-style download manager. Files the WebView can't display are routed
 /// here (iOS 26's `WebPage` has no download delegate), fetched through the same
 /// in-app SOCKS5 proxy the tabs use, and tracked in `items` with live progress.
@@ -52,6 +75,8 @@ final class DownloadItem: Identifiable {
 @Observable
 final class BrowserDownloadManager: NSObject, URLSessionDownloadDelegate {
     private(set) var items: [DownloadItem] = []
+    /// A download awaiting user confirmation; drives the confirmation dialog.
+    var pendingPrompt: DownloadPrompt?
     /// Transient confirmation for terminal events ("Downloaded …" / "Download
     /// failed"), shown briefly by the browser chrome.
     var toast: String?
@@ -75,6 +100,54 @@ final class BrowserDownloadManager: NSObject, URLSessionDownloadDelegate {
         config.proxyConfigurations = [ProxyConfiguration(socksv5Proxy: endpoint)]
         return URLSession(configuration: config, delegate: self, delegateQueue: .main)
     }()
+
+    // MARK: - Confirmation
+
+    /// Gathers metadata and presents a confirmation prompt instead of starting
+    /// immediately. `response` is the navigation response when one is available
+    /// (it already carries size/filename); otherwise a HEAD request fetches them.
+    func requestDownload(_ request: URLRequest, response: URLResponse?) async {
+        guard let url = request.url else { return }
+
+        let filename: String
+        let byteCount: Int64
+        if let response {
+            filename = Self.sanitizedFilename(response.suggestedFilename, url: url)
+            byteCount = response.expectedContentLength
+        } else {
+            (filename, byteCount) = await headMetadata(for: request, url: url)
+        }
+
+        pendingPrompt = DownloadPrompt(
+            request: request,
+            filename: filename,
+            byteCount: byteCount,
+            host: url.host())
+    }
+
+    /// Confirms the prompt and begins the actual download.
+    func confirm(_ prompt: DownloadPrompt) {
+        pendingPrompt = nil
+        Task { await startDownload(prompt.request, suggestedFilename: prompt.filename) }
+    }
+
+    func cancelPrompt() {
+        pendingPrompt = nil
+    }
+
+    /// Probes the URL with a HEAD request (through the proxy, with cookies) to
+    /// learn the filename and size. Falls back to URL-derived values on failure.
+    private func headMetadata(for request: URLRequest, url: URL) async -> (filename: String, byteCount: Int64) {
+        var head = request
+        head.httpMethod = "HEAD"
+        await applyCookies(to: &head, url: url)
+        do {
+            let (_, response) = try await session.data(for: head)
+            return (Self.sanitizedFilename(response.suggestedFilename, url: url), response.expectedContentLength)
+        } catch {
+            return (Self.sanitizedFilename(nil, url: url), -1)
+        }
+    }
 
     // MARK: - Starting downloads
 

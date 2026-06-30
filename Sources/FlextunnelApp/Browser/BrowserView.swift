@@ -79,6 +79,14 @@ struct BrowserView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .sheet(item: Bindable(model.downloads).pendingPrompt) { prompt in
+            DownloadPromptView(
+                prompt: prompt,
+                onDownload: { model.downloads.confirm(prompt) },
+                onCancel: { model.downloads.cancelPrompt() })
+                .presentationDetents([.height(220)])
+                .presentationDragIndicator(.visible)
+        }
         .animation(.easeInOut(duration: 0.25), value: model.downloads.toast)
         .onChange(of: model.downloads.toast) {
             // Auto-clear the terminal download toast after a moment.
