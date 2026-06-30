@@ -242,6 +242,12 @@ private struct BottomActionBar: View {
                         Label("Open in Safari (bypasses tunnel)", systemImage: "safari")
                     }
                 }
+                Button {
+                    model.closeTab(tab)
+                } label: {
+                    Label("Close Tab", systemImage: "xmark.square")
+                }
+                .disabled(model.tabs.count <= 1)
                 Divider()
                 Button(role: .destructive, action: onDisconnect) {
                     Label("Disconnect Tunnel", systemImage: "stop.circle")
