@@ -808,7 +808,7 @@ private struct TunnelStatusPopover: View {
                         DetailRow("Requested port", "\(summary.requestedSocksPort)")
                         DetailRow("Server node id", summary.serverNodeID, monospace: true)
                         DetailRow("Relay URLs", relayURLsText(summary.relayURLs))
-                        DetailRow("DNS discovery", summary.dnsServer ?? "default")
+                        DetailRow("DNS discovery", summary.dnsServer ?? "iroh discovery")
                     }
                 }
 
