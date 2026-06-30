@@ -28,11 +28,10 @@ final class BrowserTab: Identifiable {
     }
 
     /// Build a tab whose `WebPage` is proxied through the loopback SOCKS5 listener.
-    /// A dedicated non-persistent data store keeps the proxy applied cleanly and
-    /// avoids any unproxied cache leaking in.
-    static func make(socksPort: UInt16) -> BrowserTab {
+    /// The shared non-persistent data store keeps all tabs in one ephemeral session.
+    static func make(socksPort: UInt16, websiteDataStore: WKWebsiteDataStore) -> BrowserTab {
         var config = WebPage.Configuration()
-        config.websiteDataStore = .nonPersistent()
+        config.websiteDataStore = websiteDataStore
 
         let endpoint = NWEndpoint.hostPort(
             host: "127.0.0.1",
@@ -59,7 +58,7 @@ final class BrowserTab: Identifiable {
 
     func load(_ url: URL) {
         lastError = nil
-        log.info("loading \(url.absoluteString, privacy: .public) via in-app SOCKS5")
+        log.info("loading host \(Self.logHost(for: url), privacy: .public) via in-app SOCKS5")
         page.load(URLRequest(url: url))
     }
 
@@ -90,11 +89,15 @@ final class BrowserTab: Identifiable {
             for try await _ in page.navigations {
                 lastError = nil
             }
-            log.info("navigations stream ended for \(self.page.url?.absoluteString ?? "?", privacy: .public)")
+            log.info("navigations stream ended for host \(Self.logHost(for: self.page.url), privacy: .public)")
         } catch {
             let message = error.localizedDescription
-            log.error("navigation failed: \(message, privacy: .public)")
+            log.error("navigation failed: \(message, privacy: .private)")
             lastError = message
         }
+    }
+
+    private static func logHost(for url: URL?) -> String {
+        url?.host() ?? "unknown"
     }
 }
