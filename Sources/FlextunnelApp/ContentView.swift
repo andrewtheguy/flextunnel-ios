@@ -9,6 +9,10 @@ struct ContentView: View {
     @State private var socksPortText = "18080"
     @State private var browserModel: BrowserModel?
     @State private var didLoadToken = false
+    // The immutable settings snapshot handed to `proxy.start`, so the Keychain
+    // save on `.connected` persists the exact token that authenticated — not
+    // whatever the (still-editable) field holds by the time the handshake lands.
+    @State private var connectingSettings: ProxyController.Settings?
 
     // Owned here so bookmarks/history survive BrowserModel being recreated when
     // the proxy port changes.
@@ -63,7 +67,9 @@ struct ContentView: View {
                         .listRowBackground(Color.clear)
                     } else {
                         Button("Start proxy") {
-                            proxy.start(currentSettings())
+                            let settings = currentSettings()
+                            connectingSettings = settings
+                            proxy.start(settings)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
@@ -91,9 +97,10 @@ struct ContentView: View {
             .onChange(of: proxy.phase) { _, newPhase in
                 // Persist the token only once it has actually authenticated, so a
                 // typo'd credential (which starts fine but fails the handshake)
-                // never overwrites a good one.
-                if newPhase == .connected {
-                    TokenStore.save(trimmedAuthToken)
+                // never overwrites a good one. Save the token from the snapshot the
+                // connection used, not the live (still-editable) field.
+                if newPhase == .connected, let token = connectingSettings?.authToken {
+                    TokenStore.save(token)
                 }
                 syncBrowserPresentation()
             }
