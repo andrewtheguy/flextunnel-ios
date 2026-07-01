@@ -7,11 +7,27 @@ import Combine
 /// `ProxyWebView` points a WKWebView at.
 @MainActor
 final class ProxyController: ObservableObject {
+    /// Where the tunnel is in its lifecycle. The browser is only shown, and the
+    /// status icon only goes green, once we reach `.connected` — i.e. the server
+    /// handshake actually completed. `flextunnel_start` returning a handle only
+    /// means the SOCKS listener bound and the connect loop was spawned; auth and
+    /// signaling happen asynchronously afterwards, so treating that as success
+    /// flashes a working browser that then vanishes when the connect fails.
+    enum Phase: Equatable {
+        case idle
+        case connecting
+        case connected
+        case failed
+    }
+
     @Published var status: String = "idle"
     @Published var lastError: String?
+    /// Current lifecycle phase; drives whether the browser is presented.
+    @Published private(set) var phase: Phase = .idle
     /// Loopback SOCKS5 port the core bound (fixed), or nil while stopped.
     @Published var socksPort: UInt16?
-    /// Latest healthcheck result: true while the serve loop is alive.
+    /// True only once the handshake completed and the serve loop is still alive.
+    /// Gates the browser and the green status icon.
     @Published var healthy: Bool = false
     /// Non-secret settings for the currently running proxy, safe to show in UI.
     @Published private(set) var connectionSummary: ConnectionSummary?
@@ -21,6 +37,11 @@ final class ProxyController: ObservableObject {
 
     private var handle: OpaquePointer?
     private var healthTimer: Timer?
+    /// Give up on a stalled handshake after this long. `flextunnel_health` flips
+    /// to 0 quickly on a fatal connect error, so this is only a backstop for a
+    /// connect that hangs without ever failing outright.
+    private static let connectTimeout: TimeInterval = 20
+    private var connectDeadline: Date?
 
     /// Connection parameters entered in the UI.
     struct Settings {
@@ -80,6 +101,7 @@ final class ProxyController: ObservableObject {
         guard let handle else {
             lastError = "start failed: \(resultStr)"
             status = "error"
+            phase = .failed
             return
         }
         self.handle = handle
@@ -93,6 +115,7 @@ final class ProxyController: ObservableObject {
             self.handle = nil
             lastError = "bad result JSON: \(resultStr)"
             status = "error"
+            phase = .failed
             return
         }
 
@@ -101,20 +124,26 @@ final class ProxyController: ObservableObject {
             relayURLs: s.relayURLs,
             dnsServer: nil)
         socksPort = UInt16(port)
-        healthy = true
-        status = "running on 127.0.0.1:\(port)"
+        // Not healthy yet: the handle only means the listener bound and the
+        // connect loop spawned. Stay in `.connecting` until the handshake lands.
+        healthy = false
+        phase = .connecting
+        connectDeadline = Date().addingTimeInterval(Self.connectTimeout)
+        status = "connecting to server…"
         startHealthPolling()
     }
 
     func stop() {
         healthTimer?.invalidate()
         healthTimer = nil
+        connectDeadline = nil
         if let handle {
             flextunnel_stop(handle)
             self.handle = nil
         }
         socksPort = nil
         healthy = false
+        phase = .idle
         connectionSummary = nil
         forwardedRoutes = nil
         if status != "error" { status = "idle" }
@@ -122,35 +151,60 @@ final class ProxyController: ObservableObject {
 
     // MARK: - Healthcheck
 
-    /// Poll the core's liveness probe so the UI reflects a tunnel that gave up
-    /// (e.g. bad node id / auth / unreachable server) instead of silently
-    /// looking "running".
+    /// Poll the core so the UI tracks the real handshake: promote `.connecting`
+    /// to `.connected` only once the tunnel reports connected, and surface a
+    /// tunnel that gave up (bad node id / auth / unreachable server) instead of
+    /// silently looking "running".
     private func startHealthPolling() {
         healthTimer?.invalidate()
-        healthTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.checkHealth()
-                self?.refreshRoutes()
-            }
+        healthTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.poll() }
         }
-        refreshRoutes() // first read without waiting a full interval
+        poll() // first read without waiting a full interval
     }
 
-    private func checkHealth() {
+    private func poll() {
         guard let handle else { return }
-        switch flextunnel_health(handle) {
-        case 1:
-            healthy = true
-        case 0:
-            // The serve loop ended. Surface it and stop polling; the handle stays
-            // valid until the user taps Stop.
-            healthy = false
-            status = "stopped — tunnel ended (check server id / auth / reachability)"
-            healthTimer?.invalidate()
-            healthTimer = nil
-        default:
-            healthy = false
+
+        // A dead serve loop is fatal in any phase: the connect gave up.
+        if flextunnel_health(handle) == 0 {
+            fail(phase == .connecting
+                ? "couldn't connect — check server id / auth / reachability"
+                : "tunnel ended — check server id / auth / reachability")
+            return
         }
+
+        refreshRoutes()
+        let isConnected = forwardedRoutes?.connected == true
+
+        switch phase {
+        case .connecting:
+            if isConnected {
+                phase = .connected
+                healthy = true
+                status = "connected on 127.0.0.1:\(socksPort.map(String.init) ?? "?")"
+            } else if let deadline = connectDeadline, Date() >= deadline {
+                fail("timed out connecting — check server id / auth / reachability")
+            }
+        case .connected:
+            // Handshake done; keep the liveness flag in sync so a later drop is
+            // reflected (and tears the browser down) instead of looking healthy.
+            healthy = isConnected
+        case .idle, .failed:
+            break
+        }
+    }
+
+    /// Mark the session failed, stop polling, and surface the reason. The handle
+    /// stays valid (so status stays inspectable) until the user taps Stop.
+    private func fail(_ message: String) {
+        healthy = false
+        phase = .failed
+        status = message
+        if lastError == nil { lastError = message }
+        healthTimer?.invalidate()
+        healthTimer = nil
+        connectDeadline = nil
     }
 
     /// Poll the core for the split-tunnel set learned during the handshake. The

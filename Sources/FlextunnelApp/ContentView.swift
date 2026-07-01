@@ -49,23 +49,32 @@ struct ContentView: View {
                 }
 
                 Section {
-                    Button("Start proxy") {
-                        proxy.start(currentSettings())
-                        // Persist the token only once it has driven a clean
-                        // start, so we never save a typo'd credential.
-                        if proxy.socksPort != nil {
-                            TokenStore.save(trimmedAuthToken)
+                    if proxy.phase == .connecting {
+                        HStack(spacing: 12) {
+                            ProgressView()
+                            Text("Connecting to server…")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Cancel") { proxy.stop() }
+                                .buttonStyle(.bordered)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                    } else {
+                        Button("Start proxy") {
+                            proxy.start(currentSettings())
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .frame(maxWidth: .infinity)
+                        .disabled(!canStartProxy)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .frame(maxWidth: .infinity)
-                    .disabled(!canStartProxy)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
 
-                    if let err = proxy.lastError {
-                        Text(err)
+                    if proxy.phase == .failed {
+                        Text(proxy.lastError ?? proxy.status)
                             .foregroundStyle(.red)
                             .font(.footnote)
                     }
@@ -79,7 +88,15 @@ struct ContentView: View {
                         .interactiveDismissDisabled(proxy.socksPort != nil)
                 }
             }
-            .onChange(of: proxy.healthy) { syncBrowserPresentation() }
+            .onChange(of: proxy.phase) { _, newPhase in
+                // Persist the token only once it has actually authenticated, so a
+                // typo'd credential (which starts fine but fails the handshake)
+                // never overwrites a good one.
+                if newPhase == .connected {
+                    TokenStore.save(trimmedAuthToken)
+                }
+                syncBrowserPresentation()
+            }
             .onChange(of: proxy.socksPort) { syncBrowserPresentation() }
             .onAppear {
                 loadStoredToken()
@@ -154,7 +171,10 @@ struct ContentView: View {
     }
 
     private func syncBrowserPresentation() {
-        guard let socksPort = proxy.socksPort, proxy.healthy else {
+        // Only present the browser once the handshake has landed — never during
+        // `.connecting`, so the browser can't flash up and then vanish when a
+        // connect fails.
+        guard proxy.phase == .connected, let socksPort = proxy.socksPort else {
             browserModel?.stopAll()
             browserModel = nil
             return
