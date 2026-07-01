@@ -15,8 +15,16 @@ final class ProxyController: ObservableObject {
     /// flashes a working browser that then vanishes when the connect fails.
     enum Phase: Equatable {
         case idle
+        /// Initial connect attempt (no browser presented yet).
         case connecting
+        /// Handshake landed; browser is presented.
         case connected
+        /// Dropped after a successful connect; auto-retrying (attempts remain).
+        case reconnecting
+        /// Auto-retry budget exhausted; browser stays open awaiting a manual
+        /// reconnect.
+        case disconnected
+        /// Initial connect failed (terminal; shown on the setup screen).
         case failed
     }
 
@@ -42,6 +50,17 @@ final class ProxyController: ObservableObject {
     /// connect that hangs without ever failing outright.
     private static let connectTimeout: TimeInterval = 20
     private var connectDeadline: Date?
+
+    /// Last settings that drove a launch, replayed by auto-retry and the manual
+    /// Reconnect button.
+    private var lastSettings: Settings?
+    /// True only after a real connect: gates whether a drop auto-reconnects (vs.
+    /// an initial failure, which is terminal on the setup screen).
+    private var autoReconnect = false
+    private var reconnectAttempt = 0
+    private var reconnectTimer: Timer?
+    private static let maxReconnectAttempts = 5
+    private static let maxReconnectDelay: TimeInterval = 30
 
     /// Connection parameters entered in the UI.
     struct Settings {
@@ -72,10 +91,23 @@ final class ProxyController: ObservableObject {
         flextunnel_init_logging()
     }
 
-    /// Build the FFI config JSON, start the proxy, and publish the bound port.
+    /// User-initiated start. Clears any auto-reconnect state left over from a
+    /// prior session, then launches.
     func start(_ s: Settings) {
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+        autoReconnect = false
+        reconnectAttempt = 0
+        launch(s)
+    }
+
+    /// Build the FFI config JSON, start the proxy, and publish the bound port.
+    /// Shared by `start` and the auto-retry / manual reconnect paths, so it must
+    /// not touch reconnect bookkeeping.
+    private func launch(_ s: Settings) {
+        lastSettings = s
         lastError = nil
-        stop() // tear down any previous session first
+        teardownHandle() // tear down any previous handle first
 
         let configDict: [String: Any] = [
             "server_node_id": s.serverNodeID,
@@ -88,7 +120,7 @@ final class ProxyController: ObservableObject {
             let data = try? JSONSerialization.data(withJSONObject: configDict),
             let configStr = String(data: data, encoding: .utf8)
         else {
-            lastError = "failed to encode config JSON"
+            enterFailureOrReconnect("failed to encode config JSON")
             return
         }
 
@@ -99,9 +131,7 @@ final class ProxyController: ObservableObject {
         let resultStr = String(cString: buf)
 
         guard let handle else {
-            lastError = "start failed: \(resultStr)"
-            status = "error"
-            phase = .failed
+            enterFailureOrReconnect("start failed: \(resultStr)")
             return
         }
         self.handle = handle
@@ -113,9 +143,7 @@ final class ProxyController: ObservableObject {
         else {
             flextunnel_stop(handle)
             self.handle = nil
-            lastError = "bad result JSON: \(resultStr)"
-            status = "error"
-            phase = .failed
+            enterFailureOrReconnect("bad result JSON: \(resultStr)")
             return
         }
 
@@ -133,9 +161,39 @@ final class ProxyController: ObservableObject {
         startHealthPolling()
     }
 
+    /// Explicit user quit: cancel auto-reconnect and fully tear down.
     func stop() {
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+        autoReconnect = false
+        reconnectAttempt = 0
+        connectDeadline = nil
+        teardownHandle()
+        phase = .idle
+        status = "idle"
+    }
+
+    /// Manual reconnect from the disconnected/reconnecting overlay. Skips any
+    /// pending backoff and refreshes the retry budget.
+    func retryNow() {
+        guard let lastSettings else { return }
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+        reconnectAttempt = 0
+        autoReconnect = true
+        launch(lastSettings)
+    }
+
+    private func stopPolling() {
         healthTimer?.invalidate()
         healthTimer = nil
+    }
+
+    /// Stop the FFI handle and polling and clear per-session state, leaving
+    /// reconnect bookkeeping (`autoReconnect`, attempt counter, timer) untouched
+    /// so a reconnect attempt can replace the handle in place.
+    private func teardownHandle() {
+        stopPolling()
         connectDeadline = nil
         if let handle {
             flextunnel_stop(handle)
@@ -143,10 +201,8 @@ final class ProxyController: ObservableObject {
         }
         socksPort = nil
         healthy = false
-        phase = .idle
         connectionSummary = nil
         forwardedRoutes = nil
-        if status != "error" { status = "idle" }
     }
 
     // MARK: - Healthcheck
@@ -166,9 +222,9 @@ final class ProxyController: ObservableObject {
     private func poll() {
         guard let handle else { return }
 
-        // A dead serve loop is fatal in any phase: the connect gave up.
+        // A dead serve loop is fatal: the connect gave up or the tunnel dropped.
         if flextunnel_health(handle) == 0 {
-            fail(phase == .connecting
+            enterFailureOrReconnect(phase == .connecting
                 ? "couldn't connect — check server id / auth / reachability"
                 : "tunnel ended — check server id / auth / reachability")
             return
@@ -182,29 +238,58 @@ final class ProxyController: ObservableObject {
             if isConnected {
                 phase = .connected
                 healthy = true
+                autoReconnect = true      // a real connect arms auto-reconnect
+                reconnectAttempt = 0
                 status = "connected on 127.0.0.1:\(socksPort.map(String.init) ?? "?")"
             } else if let deadline = connectDeadline, Date() >= deadline {
-                fail("timed out connecting — check server id / auth / reachability")
+                enterFailureOrReconnect("timed out connecting — check server id / auth / reachability")
             }
         case .connected:
-            // Handshake done; keep the liveness flag in sync so a later drop is
-            // reflected (and tears the browser down) instead of looking healthy.
-            healthy = isConnected
-        case .idle, .failed:
+            // Handshake done; a later drop routes into auto-reconnect.
+            if !isConnected {
+                enterFailureOrReconnect("tunnel dropped")
+            }
+        case .idle, .reconnecting, .disconnected, .failed:
             break
         }
     }
 
-    /// Mark the session failed, stop polling, and surface the reason. The handle
-    /// stays valid (so status stays inspectable) until the user taps Stop.
-    private func fail(_ message: String) {
+    /// Route a connect/serve failure: retry automatically after a successful
+    /// connect (until the budget is spent), otherwise fail terminally.
+    private func enterFailureOrReconnect(_ reason: String) {
+        stopPolling()
         healthy = false
-        phase = .failed
-        status = message
-        if lastError == nil { lastError = message }
-        healthTimer?.invalidate()
-        healthTimer = nil
         connectDeadline = nil
+
+        guard autoReconnect else {
+            // Initial connect failure — terminal, surfaced on the setup screen.
+            // Release the dead handle so the setup screen is fully reset.
+            teardownHandle()
+            phase = .failed
+            status = reason
+            if lastError == nil { lastError = reason }
+            return
+        }
+
+        if reconnectAttempt >= Self.maxReconnectAttempts {
+            phase = .disconnected
+            status = "disconnected — \(reason)"
+        } else {
+            phase = .reconnecting
+            scheduleReconnect()
+        }
+    }
+
+    /// Arm a one-shot backoff timer for the next auto-reconnect attempt.
+    private func scheduleReconnect() {
+        guard let lastSettings else { return }
+        let delay = min(pow(2, Double(reconnectAttempt)), Self.maxReconnectDelay)
+        reconnectAttempt += 1
+        status = "reconnecting… (attempt \(reconnectAttempt)/\(Self.maxReconnectAttempts))"
+        reconnectTimer?.invalidate()
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.launch(lastSettings) }
+        }
     }
 
     /// Poll the core for the split-tunnel set learned during the handshake. The
@@ -226,6 +311,7 @@ final class ProxyController: ObservableObject {
 
     deinit {
         healthTimer?.invalidate()
+        reconnectTimer?.invalidate()
         if let handle { flextunnel_stop(handle) }
     }
 }

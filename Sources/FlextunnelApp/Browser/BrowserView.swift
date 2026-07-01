@@ -27,36 +27,49 @@ struct BrowserView: View {
                 onStopAndReconfigure: stopAndDismiss)
             Divider()
 
-            if let tab = model.selectedTab {
-                if tab.isHome {
-                    BrowserHomeView(
-                        proxyAvailable: proxyAvailable,
-                        onOpen: { model.navigate($0) })
-                } else {
-                    // Keep the WebView mounted and layer the failure screen over
-                    // it, so retrying toggles an overlay instead of tearing down
-                    // and recreating the web view (which flickers).
-                    WebView(tab.page)
-                        .webViewBackForwardNavigationGestures(.enabled)
-                        .findNavigator(isPresented: $showingFind)
-                        .overlay(alignment: .top) { progressBar(for: tab.page) }
-                        .overlay {
-                            if let warning = tab.certificateWarning {
-                                BrowserCertificateWarningView(
-                                    warning: warning,
-                                    onProceed: { tab.resolveCertificateWarning(allow: true) },
-                                    onGoBack: { tab.resolveCertificateWarning(allow: false) })
-                            } else if let failure = tab.loadFailure {
-                                BrowserLoadFailureView(
-                                    failure: failure,
-                                    onRetry: { tab.retryFailedLoad() })
+            Group {
+                if let tab = model.selectedTab {
+                    if tab.isHome {
+                        BrowserHomeView(
+                            proxyAvailable: proxyAvailable,
+                            onOpen: { model.navigate($0) })
+                    } else {
+                        // Keep the WebView mounted and layer the failure screen over
+                        // it, so retrying toggles an overlay instead of tearing down
+                        // and recreating the web view (which flickers).
+                        WebView(tab.page)
+                            .webViewBackForwardNavigationGestures(.enabled)
+                            .findNavigator(isPresented: $showingFind)
+                            .overlay(alignment: .top) { progressBar(for: tab.page) }
+                            .overlay {
+                                if let warning = tab.certificateWarning {
+                                    BrowserCertificateWarningView(
+                                        warning: warning,
+                                        onProceed: { tab.resolveCertificateWarning(allow: true) },
+                                        onGoBack: { tab.resolveCertificateWarning(allow: false) })
+                                } else if let failure = tab.loadFailure {
+                                    BrowserLoadFailureView(
+                                        failure: failure,
+                                        onRetry: { tab.retryFailedLoad() })
+                                }
                             }
-                        }
+                    }
+                } else {
+                    EmptyBrowserView(
+                        proxyAvailable: proxyAvailable,
+                        onNewTab: { model.addTab() })
                 }
-            } else {
-                EmptyBrowserView(
-                    proxyAvailable: proxyAvailable,
-                    onNewTab: { model.addTab() })
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The tunnel dropped after connecting: keep the browser mounted and
+            // layer a reconnect screen over the page instead of closing it.
+            .overlay {
+                if !proxyAvailable {
+                    TunnelInterruptionOverlay(
+                        proxy: proxy,
+                        onReconnect: { proxy.retryNow() },
+                        onQuit: stopAndDismiss)
+                }
             }
 
             Divider()
@@ -127,14 +140,15 @@ struct BrowserView: View {
         return .secondary
     }
 
+    /// Keep navigation gated to the tunnel's availability. A drop no longer
+    /// dismisses the browser — the reconnect overlay covers the page while the
+    /// tunnel auto-reconnects; only an explicit Quit (`stopAndDismiss`) closes it.
     private func enforceProxyAvailability() {
         model.proxyIsAvailable = proxyAvailable
-        guard proxyAvailable else {
-            model.stopAll()
+        if !proxyAvailable {
+            // Close transient sheets so the reconnect overlay isn't buried.
             showingTunnelStatus = false
             showingTabTray = false
-            dismiss()
-            return
         }
     }
 
@@ -162,6 +176,59 @@ struct BrowserView: View {
         }
     }
 
+}
+
+/// Covers the page when the tunnel is unavailable after a successful connect.
+/// While attempts remain the tunnel auto-reconnects (spinner); once the budget
+/// is spent it waits for a manual Reconnect. Quit is the only way out.
+private struct TunnelInterruptionOverlay: View {
+    @ObservedObject var proxy: ProxyController
+    let onReconnect: () -> Void
+    let onQuit: () -> Void
+
+    private var isRetrying: Bool {
+        proxy.phase == .connecting || proxy.phase == .reconnecting
+    }
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.background)
+                .opacity(0.94)
+                .ignoresSafeArea()
+
+            VStack(spacing: 20) {
+                Image(systemName: isRetrying ? "bolt.horizontal.circle" : "bolt.horizontal.circle.fill")
+                    .font(.system(size: 52, weight: .regular))
+                    .foregroundStyle(isRetrying ? Color.orange : Color.red)
+
+                Text(isRetrying ? "Reconnecting…" : "Tunnel disconnected")
+                    .font(.title2.weight(.semibold))
+
+                Text(proxy.status)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+
+                if isRetrying {
+                    ProgressView()
+                        .padding(.top, 2)
+                }
+
+                VStack(spacing: 12) {
+                    Button(isRetrying ? "Reconnect now" : "Reconnect", action: onReconnect)
+                        .buttonStyle(.borderedProminent)
+                    Button("Quit", role: .destructive, action: onQuit)
+                        .buttonStyle(.bordered)
+                }
+                .controlSize(.large)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 4)
+            }
+            .padding(32)
+            .frame(maxWidth: 360)
+        }
+    }
 }
 
 /// Transient confirmation shown after a bookmark is saved.

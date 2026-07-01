@@ -170,17 +170,18 @@ struct ContentView: View {
         }
     }
 
+    /// Present-only: create the browser once the handshake lands and never tear
+    /// it down here. A drop after connecting keeps the browser up (the tunnel
+    /// auto-reconnects behind an overlay); teardown happens solely through the
+    /// explicit-quit path — `stopAndDismiss` → `proxy.stop()` (socksPort == nil)
+    /// → the `browserIsPresented` setter clears `browserModel`.
     private func syncBrowserPresentation() {
-        // Only present the browser once the handshake has landed — never during
-        // `.connecting`, so the browser can't flash up and then vanish when a
-        // connect fails.
-        guard proxy.phase == .connected, let socksPort = proxy.socksPort else {
-            browserModel?.stopAll()
-            browserModel = nil
-            return
-        }
+        guard proxy.phase == .connected, let socksPort = proxy.socksPort else { return }
 
-        if browserModel?.socksPort != socksPort {
+        if browserModel == nil {
+            browserModel = BrowserModel(socksPort: socksPort, library: library)
+        } else if browserModel?.socksPort != socksPort {
+            browserModel?.stopAll()
             browserModel = BrowserModel(socksPort: socksPort, library: library)
         }
     }
