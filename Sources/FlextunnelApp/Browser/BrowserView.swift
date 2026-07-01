@@ -24,52 +24,40 @@ struct BrowserView: View {
                 tunnelStatusIcon: tunnelStatusIcon,
                 tunnelStatusColor: tunnelStatusColor,
                 showingTunnelStatus: $showingTunnelStatus,
+                onReconnect: { proxy.retryNow() },
                 onStopAndReconfigure: stopAndDismiss)
             Divider()
 
-            Group {
-                if let tab = model.selectedTab {
-                    if tab.isHome {
-                        BrowserHomeView(
-                            proxyAvailable: proxyAvailable,
-                            onOpen: { model.navigate($0) })
-                    } else {
-                        // Keep the WebView mounted and layer the failure screen over
-                        // it, so retrying toggles an overlay instead of tearing down
-                        // and recreating the web view (which flickers).
-                        WebView(tab.page)
-                            .webViewBackForwardNavigationGestures(.enabled)
-                            .findNavigator(isPresented: $showingFind)
-                            .overlay(alignment: .top) { progressBar(for: tab.page) }
-                            .overlay {
-                                if let warning = tab.certificateWarning {
-                                    BrowserCertificateWarningView(
-                                        warning: warning,
-                                        onProceed: { tab.resolveCertificateWarning(allow: true) },
-                                        onGoBack: { tab.resolveCertificateWarning(allow: false) })
-                                } else if let failure = tab.loadFailure {
-                                    BrowserLoadFailureView(
-                                        failure: failure,
-                                        onRetry: { tab.retryFailedLoad() })
-                                }
-                            }
-                    }
-                } else {
-                    EmptyBrowserView(
+            if let tab = model.selectedTab {
+                if tab.isHome {
+                    BrowserHomeView(
                         proxyAvailable: proxyAvailable,
-                        onNewTab: { model.addTab() })
+                        onOpen: { model.navigate($0) })
+                } else {
+                    // Keep the WebView mounted and layer the failure screen over
+                    // it, so retrying toggles an overlay instead of tearing down
+                    // and recreating the web view (which flickers).
+                    WebView(tab.page)
+                        .webViewBackForwardNavigationGestures(.enabled)
+                        .findNavigator(isPresented: $showingFind)
+                        .overlay(alignment: .top) { progressBar(for: tab.page) }
+                        .overlay {
+                            if let warning = tab.certificateWarning {
+                                BrowserCertificateWarningView(
+                                    warning: warning,
+                                    onProceed: { tab.resolveCertificateWarning(allow: true) },
+                                    onGoBack: { tab.resolveCertificateWarning(allow: false) })
+                            } else if let failure = tab.loadFailure {
+                                BrowserLoadFailureView(
+                                    failure: failure,
+                                    onRetry: { tab.retryFailedLoad() })
+                            }
+                        }
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // The tunnel dropped after connecting: keep the browser mounted and
-            // layer a reconnect screen over the page instead of closing it.
-            .overlay {
-                if !proxyAvailable {
-                    TunnelInterruptionOverlay(
-                        proxy: proxy,
-                        onReconnect: { proxy.retryNow() },
-                        onQuit: stopAndDismiss)
-                }
+            } else {
+                EmptyBrowserView(
+                    proxyAvailable: proxyAvailable,
+                    onNewTab: { model.addTab() })
             }
 
             Divider()
@@ -141,15 +129,10 @@ struct BrowserView: View {
     }
 
     /// Keep navigation gated to the tunnel's availability. A drop no longer
-    /// dismisses the browser — the reconnect overlay covers the page while the
-    /// tunnel auto-reconnects; only an explicit Quit (`stopAndDismiss`) closes it.
+    /// dismisses the browser — the page stays put and reconnect/quit live in the
+    /// tunnel status popover; only an explicit Quit (`stopAndDismiss`) closes it.
     private func enforceProxyAvailability() {
         model.proxyIsAvailable = proxyAvailable
-        if !proxyAvailable {
-            // Close transient sheets so the reconnect overlay isn't buried.
-            showingTunnelStatus = false
-            showingTabTray = false
-        }
     }
 
     private func stopAndDismiss() {
@@ -176,59 +159,6 @@ struct BrowserView: View {
         }
     }
 
-}
-
-/// Covers the page when the tunnel is unavailable after a successful connect.
-/// While attempts remain the tunnel auto-reconnects (spinner); once the budget
-/// is spent it waits for a manual Reconnect. Quit is the only way out.
-private struct TunnelInterruptionOverlay: View {
-    @ObservedObject var proxy: ProxyController
-    let onReconnect: () -> Void
-    let onQuit: () -> Void
-
-    private var isRetrying: Bool {
-        proxy.phase == .connecting || proxy.phase == .reconnecting
-    }
-
-    var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(.background)
-                .opacity(0.94)
-                .ignoresSafeArea()
-
-            VStack(spacing: 20) {
-                Image(systemName: isRetrying ? "bolt.horizontal.circle" : "bolt.horizontal.circle.fill")
-                    .font(.system(size: 52, weight: .regular))
-                    .foregroundStyle(isRetrying ? Color.orange : Color.red)
-
-                Text(isRetrying ? "Reconnecting…" : "Tunnel disconnected")
-                    .font(.title2.weight(.semibold))
-
-                Text(proxy.status)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-
-                if isRetrying {
-                    ProgressView()
-                        .padding(.top, 2)
-                }
-
-                VStack(spacing: 12) {
-                    Button(isRetrying ? "Reconnect now" : "Reconnect", action: onReconnect)
-                        .buttonStyle(.borderedProminent)
-                    Button("Quit", role: .destructive, action: onQuit)
-                        .buttonStyle(.bordered)
-                }
-                .controlSize(.large)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 4)
-            }
-            .padding(32)
-            .frame(maxWidth: 360)
-        }
-    }
 }
 
 /// Transient confirmation shown after a bookmark is saved.
@@ -481,6 +411,7 @@ private struct AddressBarView: View {
     let tunnelStatusIcon: String
     let tunnelStatusColor: Color
     @Binding var showingTunnelStatus: Bool
+    let onReconnect: () -> Void
     let onStopAndReconfigure: () -> Void
     @State private var editText = ""
     @State private var showingSiteSecurity = false
@@ -577,6 +508,7 @@ private struct AddressBarView: View {
                 proxy: proxy,
                 boundPort: model.socksPort,
                 onDismiss: { showingTunnelStatus = false },
+                onReconnect: onReconnect,
                 onStopAndReconfigure: onStopAndReconfigure)
                 .presentationCompactAdaptation(.popover)
         }
@@ -1067,7 +999,12 @@ private struct TunnelStatusPopover: View {
     @ObservedObject var proxy: ProxyController
     let boundPort: UInt16
     let onDismiss: () -> Void
+    let onReconnect: () -> Void
     let onStopAndReconfigure: () -> Void
+
+    private var isRetrying: Bool {
+        proxy.phase == .connecting || proxy.phase == .reconnecting
+    }
 
     var body: some View {
         ScrollView {
@@ -1108,6 +1045,25 @@ private struct TunnelStatusPopover: View {
                 }
 
                 Divider()
+
+                // The tunnel dropped after connecting: reconnect lives here, in
+                // the status popover, so the page underneath is never disturbed.
+                if !proxy.healthy {
+                    if isRetrying {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Reconnecting…")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Button(action: onReconnect) {
+                        Label(isRetrying ? "Reconnect now" : "Reconnect", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
 
                 Button(role: .destructive, action: onStopAndReconfigure) {
                     Label("Stop and Reconfigure", systemImage: "stop.circle")
