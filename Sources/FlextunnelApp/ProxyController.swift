@@ -7,23 +7,16 @@ import Combine
 /// `ProxyWebView` points a WKWebView at.
 @MainActor
 final class ProxyController: ObservableObject {
-    /// Where the tunnel is in its lifecycle. The browser is only shown, and the
-    /// status icon only goes green, once we reach `.connected` — i.e. the server
-    /// handshake actually completed. `flextunnel_start` returning a handle only
-    /// means the SOCKS listener bound and the connect loop was spawned; auth and
-    /// signaling happen asynchronously afterwards, so treating that as success
-    /// flashes a working browser that then vanishes when the connect fails.
+    /// Lifecycle phase. Drives whether the browser is presented: it appears once
+    /// we reach `.connected` (the first handshake landed). Because the core keeps
+    /// the SOCKS5 listener serving and reconnects the tunnel on its own across
+    /// drops, the browser then stays presented until an explicit quit.
     enum Phase: Equatable {
         case idle
         /// Initial connect attempt (no browser presented yet).
         case connecting
-        /// Handshake landed; browser is presented.
+        /// Handshake landed at least once; browser is presented.
         case connected
-        /// Dropped after a successful connect; auto-retrying (attempts remain).
-        case reconnecting
-        /// Auto-retry budget exhausted; browser stays open awaiting a manual
-        /// reconnect.
-        case disconnected
         /// Initial connect failed (terminal; shown on the setup screen).
         case failed
     }
@@ -34,33 +27,26 @@ final class ProxyController: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     /// Loopback SOCKS5 port the core bound (fixed), or nil while stopped.
     @Published var socksPort: UInt16?
-    /// True only once the handshake completed and the serve loop is still alive.
-    /// Gates the browser and the green status icon.
-    @Published var healthy: Bool = false
+    /// The SOCKS5 serve loop is alive (FFI health == 1). This — not the tunnel
+    /// link — gates browsing: while it's up, off-list targets connect directly
+    /// even if the tunnel is down.
+    @Published var socksAlive: Bool = false
+    /// The tunnel link to the server is up (handshake live). On-list (whitelisted)
+    /// targets only work while this is true; off-list targets don't need it.
+    @Published var tunnelConnected: Bool = false
     /// Non-secret settings for the currently running proxy, safe to show in UI.
     @Published private(set) var connectionSummary: ConnectionSummary?
-    /// Split-tunnel set the server pushed: domains/CIDRs routed through the
-    /// tunnel. Nil until the handshake completes; populated by polling.
+    /// The tunnel set the server pushed: domains/CIDRs routed through the tunnel.
+    /// Nil until the first handshake; retained across drops by the core.
     @Published private(set) var forwardedRoutes: ForwardedRoutes?
 
     private var handle: OpaquePointer?
     private var healthTimer: Timer?
-    /// Give up on a stalled handshake after this long. `flextunnel_health` flips
-    /// to 0 quickly on a fatal connect error, so this is only a backstop for a
-    /// connect that hangs without ever failing outright.
+    /// Give up on a stalled first handshake after this long.
     private static let connectTimeout: TimeInterval = 20
     private var connectDeadline: Date?
-
-    /// Last settings that drove a launch, replayed by auto-retry and the manual
-    /// Reconnect button.
+    /// Last settings that drove a launch, replayed by the manual Reconnect.
     private var lastSettings: Settings?
-    /// True only after a real connect: gates whether a drop auto-reconnects (vs.
-    /// an initial failure, which is terminal on the setup screen).
-    private var autoReconnect = false
-    private var reconnectAttempt = 0
-    private var reconnectTimer: Timer?
-    private static let maxReconnectAttempts = 5
-    private static let maxReconnectDelay: TimeInterval = 30
 
     /// Connection parameters entered in the UI.
     struct Settings {
@@ -76,35 +62,37 @@ final class ProxyController: ObservableObject {
         var dnsServer: String?
     }
 
-    /// The tunnel's forwarding set as reported by the core. An empty domains +
-    /// cidrs while `connected` means the server runs no whitelist (everything is
-    /// tunneled).
+    /// The tunnel set as reported by the core: the domains/CIDRs routed through
+    /// the tunnel (off-list targets connect directly). The set is required, so it
+    /// is never empty once connected.
     struct ForwardedRoutes {
         var connected: Bool
         var domains: [String]
         var cidrs: [String]
 
-        var isWhitelistActive: Bool { !domains.isEmpty || !cidrs.isEmpty }
+        /// A `*` domain or a default-route CIDR means everything is tunneled, so a
+        /// tunnel drop is a full outage (nothing is off-list to browse directly).
+        var isFullTunnel: Bool {
+            domains.contains("*") || cidrs.contains { $0 == "0.0.0.0/0" || $0 == "::/0" }
+        }
     }
+
+    /// True when everything is routed through the tunnel (full-tunnel set), so a
+    /// drop leaves nothing to browse directly.
+    var isFullTunnel: Bool { forwardedRoutes?.isFullTunnel ?? false }
+
+    /// Whether the browser is usable right now: the SOCKS5 listener is up and
+    /// either the tunnel is connected or the set is a partial split (off-list
+    /// targets browse directly). A full-tunnel drop blocks browsing.
+    var canBrowse: Bool { socksAlive && (tunnelConnected || !isFullTunnel) }
 
     init() {
         flextunnel_init_logging()
     }
 
-    /// User-initiated start. Clears any auto-reconnect state left over from a
-    /// prior session, then launches.
+    /// User-initiated start (also the manual Reconnect target). Builds the FFI
+    /// config, starts the proxy, and publishes the bound port.
     func start(_ s: Settings) {
-        reconnectTimer?.invalidate()
-        reconnectTimer = nil
-        autoReconnect = false
-        reconnectAttempt = 0
-        launch(s)
-    }
-
-    /// Build the FFI config JSON, start the proxy, and publish the bound port.
-    /// Shared by `start` and the auto-retry / manual reconnect paths, so it must
-    /// not touch reconnect bookkeeping.
-    private func launch(_ s: Settings) {
         lastSettings = s
         lastError = nil
         teardownHandle() // tear down any previous handle first
@@ -120,7 +108,7 @@ final class ProxyController: ObservableObject {
             let data = try? JSONSerialization.data(withJSONObject: configDict),
             let configStr = String(data: data, encoding: .utf8)
         else {
-            enterFailureOrReconnect("failed to encode config JSON")
+            fail("failed to encode config JSON")
             return
         }
 
@@ -131,7 +119,7 @@ final class ProxyController: ObservableObject {
         let resultStr = String(cString: buf)
 
         guard let handle else {
-            enterFailureOrReconnect("start failed: \(resultStr)")
+            fail("start failed: \(resultStr)")
             return
         }
         self.handle = handle
@@ -143,7 +131,7 @@ final class ProxyController: ObservableObject {
         else {
             flextunnel_stop(handle)
             self.handle = nil
-            enterFailureOrReconnect("bad result JSON: \(resultStr)")
+            fail("bad result JSON: \(resultStr)")
             return
         }
 
@@ -152,36 +140,29 @@ final class ProxyController: ObservableObject {
             relayURLs: s.relayURLs,
             dnsServer: nil)
         socksPort = UInt16(port)
-        // Not healthy yet: the handle only means the listener bound and the
-        // connect loop spawned. Stay in `.connecting` until the handshake lands.
-        healthy = false
+        // Not usable yet: the handle only means the listener bound and the connect
+        // loop spawned. Stay in `.connecting` until the first handshake lands.
+        socksAlive = false
+        tunnelConnected = false
         phase = .connecting
         connectDeadline = Date().addingTimeInterval(Self.connectTimeout)
         status = "connecting to server…"
         startHealthPolling()
     }
 
-    /// Explicit user quit: cancel auto-reconnect and fully tear down.
+    /// Explicit user quit: fully tear down.
     func stop() {
-        reconnectTimer?.invalidate()
-        reconnectTimer = nil
-        autoReconnect = false
-        reconnectAttempt = 0
         connectDeadline = nil
         teardownHandle()
         phase = .idle
         status = "idle"
     }
 
-    /// Manual reconnect from the disconnected/reconnecting overlay. Skips any
-    /// pending backoff and refreshes the retry budget.
+    /// Manual reconnect. Only needed if the proxy fully died — the core
+    /// reconnects the tunnel link on its own — so this relaunches the session.
     func retryNow() {
         guard let lastSettings else { return }
-        reconnectTimer?.invalidate()
-        reconnectTimer = nil
-        reconnectAttempt = 0
-        autoReconnect = true
-        launch(lastSettings)
+        start(lastSettings)
     }
 
     private func stopPolling() {
@@ -189,9 +170,7 @@ final class ProxyController: ObservableObject {
         healthTimer = nil
     }
 
-    /// Stop the FFI handle and polling and clear per-session state, leaving
-    /// reconnect bookkeeping (`autoReconnect`, attempt counter, timer) untouched
-    /// so a reconnect attempt can replace the handle in place.
+    /// Stop the FFI handle and polling and clear per-session state.
     private func teardownHandle() {
         stopPolling()
         connectDeadline = nil
@@ -200,17 +179,22 @@ final class ProxyController: ObservableObject {
             self.handle = nil
         }
         socksPort = nil
-        healthy = false
+        socksAlive = false
+        tunnelConnected = false
         connectionSummary = nil
         forwardedRoutes = nil
     }
 
+    /// Terminal initial-connect failure: surfaced on the setup screen.
+    private func fail(_ reason: String) {
+        teardownHandle()
+        phase = .failed
+        status = reason
+        if lastError == nil { lastError = reason }
+    }
+
     // MARK: - Healthcheck
 
-    /// Poll the core so the UI tracks the real handshake: promote `.connecting`
-    /// to `.connected` only once the tunnel reports connected, and surface a
-    /// tunnel that gave up (bad node id / auth / unreachable server) instead of
-    /// silently looking "running".
     private func startHealthPolling() {
         healthTimer?.invalidate()
         healthTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -222,78 +206,56 @@ final class ProxyController: ObservableObject {
     private func poll() {
         guard let handle else { return }
 
-        // A dead serve loop is fatal: the connect gave up or the tunnel dropped.
+        // health == 0 means the serve loop ended. Before the first connect that's
+        // a fatal initial failure; after, the whole proxy died (rare — the core
+        // keeps the loop alive and retries the tunnel across drops).
         if flextunnel_health(handle) == 0 {
-            enterFailureOrReconnect(phase == .connecting
-                ? "couldn't connect — check server id / auth / reachability"
-                : "tunnel ended — check server id / auth / reachability")
+            switch phase {
+            case .connecting:
+                fail("couldn't connect — check server id / auth / reachability")
+            case .connected:
+                // Proxy died; keep the browser mounted but mark it unusable so the
+                // popover can offer a manual Reconnect.
+                socksAlive = false
+                tunnelConnected = false
+                status = "proxy stopped — tap Reconnect"
+                stopPolling()
+            case .idle, .failed:
+                break
+            }
             return
         }
 
+        socksAlive = true
         refreshRoutes()
-        let isConnected = forwardedRoutes?.connected == true
+        tunnelConnected = forwardedRoutes?.connected == true
 
         switch phase {
         case .connecting:
-            if isConnected {
+            if tunnelConnected {
                 phase = .connected
-                healthy = true
-                autoReconnect = true      // a real connect arms auto-reconnect
-                reconnectAttempt = 0
-                status = "connected on 127.0.0.1:\(socksPort.map(String.init) ?? "?")"
+                status = connectedStatus
             } else if let deadline = connectDeadline, Date() >= deadline {
-                enterFailureOrReconnect("timed out connecting — check server id / auth / reachability")
+                fail("timed out connecting — check server id / auth / reachability")
             }
         case .connected:
-            // Handshake done; a later drop routes into auto-reconnect.
-            if !isConnected {
-                enterFailureOrReconnect("tunnel dropped")
-            }
-        case .idle, .reconnecting, .disconnected, .failed:
+            // A tunnel-link drop is not a failure: the core keeps SOCKS5 serving
+            // (off-list still browses) and reconnects on its own. Reflect the link
+            // state; on-list targets fail per-tab until it recovers.
+            status = tunnelConnected
+                ? connectedStatus
+                : "tunnel reconnecting — off-list browsing active"
+        case .idle, .failed:
             break
         }
     }
 
-    /// Route a connect/serve failure: retry automatically after a successful
-    /// connect (until the budget is spent), otherwise fail terminally.
-    private func enterFailureOrReconnect(_ reason: String) {
-        stopPolling()
-        healthy = false
-        connectDeadline = nil
-
-        guard autoReconnect else {
-            // Initial connect failure — terminal, surfaced on the setup screen.
-            // Release the dead handle so the setup screen is fully reset.
-            teardownHandle()
-            phase = .failed
-            status = reason
-            if lastError == nil { lastError = reason }
-            return
-        }
-
-        if reconnectAttempt >= Self.maxReconnectAttempts {
-            phase = .disconnected
-            status = "disconnected — \(reason)"
-        } else {
-            phase = .reconnecting
-            scheduleReconnect()
-        }
+    private var connectedStatus: String {
+        "connected on 127.0.0.1:\(socksPort.map(String.init) ?? "?")"
     }
 
-    /// Arm a one-shot backoff timer for the next auto-reconnect attempt.
-    private func scheduleReconnect() {
-        guard let lastSettings else { return }
-        let delay = min(pow(2, Double(reconnectAttempt)), Self.maxReconnectDelay)
-        reconnectAttempt += 1
-        status = "reconnecting… (attempt \(reconnectAttempt)/\(Self.maxReconnectAttempts))"
-        reconnectTimer?.invalidate()
-        reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.launch(lastSettings) }
-        }
-    }
-
-    /// Poll the core for the split-tunnel set learned during the handshake. The
-    /// whitelist rides the handshake response, so a generous buffer is used.
+    /// Poll the core for the tunnel set learned during the handshake. It rides the
+    /// handshake response, so a generous buffer is used.
     private func refreshRoutes() {
         guard let handle else { return }
         var buf = [CChar](repeating: 0, count: 64 * 1024)
@@ -311,7 +273,6 @@ final class ProxyController: ObservableObject {
 
     deinit {
         healthTimer?.invalidate()
-        reconnectTimer?.invalidate()
         if let handle { flextunnel_stop(handle) }
     }
 }
