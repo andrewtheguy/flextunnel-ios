@@ -3,10 +3,10 @@
 A **private-network access browser** for iOS. It reaches private resources
 through flextunnel's SOCKS5-over-QUIC tunnel **without a system-proxy change and
 without a VPN / Network Extension**, working while the app is foregrounded. It's
-split-tunnel by default (traffic to non-whitelisted resources bypasses the
-proxy and connects directly), with the option to route everything through the
-tunnel. It behaves like a mainstream browser — **not** a privacy/anonymity
-browser.
+split-tunnel by default (traffic to off-list resources — those not in the
+server's routed tunnel set — bypasses the proxy and connects directly), with the
+option to route everything through the tunnel. It behaves like a mainstream
+browser — **not** a privacy/anonymity browser.
 
 It links `libflextunnel.a` (the Rust core, built from the sibling `../flextunnel`
 repo) directly into the app. The core runs an in-process loopback SOCKS5 listener
@@ -120,18 +120,21 @@ from `Developer.xcconfig` (gitignored, per-developer) or a `--team-id` flag.
    See `scripts/create-archive-ios.sh --help` for all options (configuration,
    output paths, and export method, which defaults to `debugging`).
 
-## Split-tunnel whitelist
+## Split-tunnel routing (the tunnel set)
 
 iOS `WKWebsiteDataStore.proxyConfigurations` is global — every WebView request
 goes to the local SOCKS5 proxy, with no per-host routing. So the routing decision
 is made in the Rust library, not the WebView: the on-device proxy tunnels
-whitelisted destinations and connects everything else directly.
+on-list destinations and connects everything else directly.
 
-The whitelist is **defined on the server** and pushed to the client during the
-handshake; the app surfaces it under **Tunnel status** (forwarded domains/CIDRs,
-or "All traffic" when the server runs no whitelist). Off-list hosts are **always
-direct-connected** today (never blocked). A future client-side blocking mode is
-on the roadmap — see "Whitelist split-tunneling → Roadmap" in the
+The tunnel set (the routed domains/CIDRs) is **defined on the server** and pushed
+to the client during the handshake; the app surfaces it under **Tunnel status**
+(tunneled domains/CIDRs, or "Full tunnel (all traffic)" when the set routes
+everything via `*` / `0.0.0.0/0`). The server also enforces the same set
+independently as a **whitelist** (defense in depth), rejecting any tunnel request
+for an off-list target. Off-list hosts are **always direct-connected** today
+(never blocked client-side). A future client-side blocking mode is on the roadmap
+— see "Routed-set split-tunneling → Roadmap" in the
 [flextunnel README](../flextunnel/README.md).
 
 ## Verifying server-side DNS

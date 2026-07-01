@@ -31,8 +31,8 @@ final class ProxyController: ObservableObject {
     /// link — gates browsing: while it's up, off-list targets connect directly
     /// even if the tunnel is down.
     @Published var socksAlive: Bool = false
-    /// The tunnel link to the server is up (handshake live). On-list (whitelisted)
-    /// targets only work while this is true; off-list targets don't need it.
+    /// The tunnel link to the server is up (handshake live). On-list targets (in
+    /// the routed tunnel set) only work while this is true; off-list targets don't.
     @Published var tunnelConnected: Bool = false
     /// Non-secret settings for the currently running proxy, safe to show in UI.
     @Published private(set) var connectionSummary: ConnectionSummary?

@@ -1066,7 +1066,7 @@ private struct TunnelStatusPopover: View {
                                 .foregroundStyle(.secondary)
                         }
                         if proxy.canBrowse {
-                            Text("Off-list browsing works; whitelisted routes are temporarily unavailable.")
+                            Text("Off-list browsing works; on-list (tunneled) routes are temporarily unavailable.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
