@@ -45,38 +45,24 @@ proxy. The core logs each CONNECT's address type so you can confirm it
 - [`xcodegen`](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`.
 - Rust with the iOS target: `rustup target add aarch64-apple-ios`.
 
-## Build & run
+The Rust static library (`libflextunnel.xcframework`) is delivered via a local
+Swift package, `Packages/Flextunnel`. Its binary target downloads the **pinned
+release zip** by URL + checksum, so a clean checkout builds reproducibly — there's
+no vendored copy to stage. To move to a new release, run
+`scripts/bump-xcframework.sh <tag>` (rewrites the url + checksum).
 
-1. **Fetch the Rust artifacts** into `vendor/`. By default this downloads a
-   pinned GitHub release (`libflextunnel.xcframework` + `flextunnel.h`), so a
-   clean checkout builds reproducibly:
-
-   ```sh
-   scripts/fetch-vendor.sh                 # pinned release (default)
-   scripts/fetch-vendor.sh --tag v0.0.11   # a different release tag
-   ```
-
-   To iterate on the Rust FFI without cutting a release, build the sibling and
-   point `vendor/` at its output (symlinks — each rebuild is picked up with no
-   re-fetch):
+1. **Generate the Xcode project** (Xcode resolves and downloads the package on
+   first build):
 
    ```sh
-   cd ../flextunnel && ./build-ios.sh release
-   cd ../flextunnel-ios && scripts/fetch-vendor.sh --local
-   ```
-
-2. **Generate the Xcode project:**
-
-   ```sh
-   cd ../flextunnel-ios
    xcodegen generate
    open Flextunnel.xcodeproj
    ```
 
-3. **Set signing.** Select your Team on the `FlextunnelApp` target (or set
+2. **Set signing.** Select your Team on the `FlextunnelApp` target (or set
    `DEVELOPMENT_TEAM` in `project.yml` and re-run `xcodegen generate`).
 
-4. **Run** on a device or the Simulator. Enter:
+3. **Run** on a device or the Simulator. Enter:
    - *Server node id* — the flextunnel server's iroh endpoint id.
    - *Auth token* — a token the server accepts (stored in the Keychain).
    - *Relay URLs* — optional hints; leave blank for iroh defaults.
@@ -84,6 +70,28 @@ proxy. The core logs each CONNECT's address type so you can confirm it
 
    Tap **Start proxy**, then browse. The **Tunnel status** button shows health,
    the bound port, and the active split-tunnel set.
+
+### Developing against a local Rust build (FFI)
+
+To iterate on the Rust FFI without cutting a release, build the sibling and set
+`FLEXTUNNEL_LOCAL_XCFRAMEWORK=1` — the package's binary target then links the
+sibling's `dist/ios` build (reached via the committed symlink
+`Packages/Flextunnel/local/libflextunnel.xcframework`) instead of the released zip:
+
+```sh
+cd ../flextunnel && ./build-ios.sh release
+cd ../flextunnel-ios
+FLEXTUNNEL_LOCAL_XCFRAMEWORK=1 xcodegen generate
+FLEXTUNNEL_LOCAL_XCFRAMEWORK=1 xcodebuild -project Flextunnel.xcodeproj \
+  -scheme FlextunnelApp \
+  -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.2' build
+```
+
+The var is read when Swift Package Manager evaluates `Package.swift`, so it must
+be set for both `xcodegen`/resolution and the build. In the Xcode GUI, export it
+before launching (`launchctl setenv FLEXTUNNEL_LOCAL_XCFRAMEWORK 1`, then restart
+Xcode) since scheme env vars don't reach package resolution. Rebuild the sibling
+and the next app build picks it up. Unset it to return to the pinned release.
 
 ## Archive & deploy (signed .ipa)
 
@@ -141,9 +149,9 @@ front-end.)
 - Targets **iOS 26**: the browser uses the SwiftUI `WebView` / `WebPage` API.
   (`WKWebsiteDataStore.proxyConfigurations`, the runtime proxy hook, requires
   iOS 17+.)
-- The vendored `libflextunnel.xcframework` is arm64-only; build/verify against a
-  pinned arm64 iOS 26 Simulator, e.g. `-destination 'platform=iOS
-  Simulator,name=iPhone 17,OS=26.2'`.
-- The `.xcodeproj` and the `vendor/` artifacts are git-ignored on purpose;
-  regenerate the project with `xcodegen` and (re)populate `vendor/` with
-  `scripts/fetch-vendor.sh` as above.
+- `libflextunnel.xcframework` is arm64-only; build/verify against a pinned arm64
+  iOS 26 Simulator, e.g. `-destination 'platform=iOS Simulator,name=iPhone
+  17,OS=26.2'`.
+- The `.xcodeproj` is git-ignored on purpose — regenerate it with `xcodegen`. The
+  xcframework is fetched by Swift Package Manager (pinned release, or a local
+  build in FFI-dev mode), not vendored into this repo.

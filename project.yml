@@ -9,11 +9,10 @@
 # (iOS 26+). No special entitlement and no paid Apple Developer account are
 # required; it also runs in the Simulator.
 #
-# The Rust static library + header live in vendor/, populated by
-#   scripts/fetch-vendor.sh
-# which by default downloads a pinned GitHub release (reproducible), or with
-# --local symlinks the sibling's fresh ../flextunnel/dist/ios build for FFI dev.
-# Run it once before `xcodegen generate`.
+# The Rust static library + header come from the local Swift package in
+# Packages/Flextunnel — a binary target that downloads the pinned release zip by
+# URL+checksum, or a local build for FFI dev. See the `packages:` section below
+# and Packages/Flextunnel/Package.swift.
 name: Flextunnel
 
 options:
@@ -21,6 +20,13 @@ options:
   deploymentTarget:
     iOS: "26.0"
   createIntermediateGroups: true
+
+packages:
+  # Local package (Packages/Flextunnel) whose binary target downloads the pinned
+  # release zip by URL+checksum (reproducible), or links a local build when
+  # FLEXTUNNEL_LOCAL_XCFRAMEWORK is set (FFI dev). No vendored copy, no fetch script.
+  Flextunnel:
+    path: Packages/Flextunnel
 
 settings:
   base:
@@ -38,12 +44,11 @@ targets:
     sources:
       - Sources/FlextunnelApp
     dependencies:
-      # Static-library XCFramework with both the device and Simulator arm64
-      # slices (fetched into vendor/ by scripts/fetch-vendor.sh). Xcode links
-      # whichever slice matches the selected destination. embed:false — static
-      # libs aren't embedded.
-      - framework: vendor/libflextunnel.xcframework
-        embed: false
+      # Static-library XCFramework delivered via the sibling's Swift package
+      # binary target (downloads the pinned release zip by URL+checksum). Xcode
+      # links whichever slice matches the selected destination.
+      - package: Flextunnel
+        product: libflextunnel
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.andrewtheguy.flextunnel
@@ -56,13 +61,11 @@ targets:
         MARKETING_VERSION: "0.0.1"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_OBJC_BRIDGING_HEADER: Sources/FlextunnelApp/Bridging-Header.h
-        # flextunnel.h (for the bridging header) sits alongside the XCFramework
-        # in vendor/ (fetch-vendor.sh puts it there). The Rust lib itself comes
-        # from the XCFramework dependency above; here we only add its system
-        # dependencies (same set ezvpn links).
-        HEADER_SEARCH_PATHS:
-          - $(inherited)
-          - $(SRCROOT)/vendor
+        # No HEADER_SEARCH_PATHS needed: SPM puts the binary target's embedded
+        # Headers/ dir on the consumer's search path, so the bridging header's
+        # `#import "flextunnel.h"` resolves automatically. The Rust lib comes from
+        # the package binary target; here we only add its system dependencies
+        # (same set ezvpn links).
         OTHER_LDFLAGS:
           - $(inherited)
           - -lresolv
