@@ -81,10 +81,18 @@ final class ProxyController: ObservableObject {
     /// drop leaves nothing to browse directly.
     var isFullTunnel: Bool { forwardedRoutes?.isFullTunnel ?? false }
 
-    /// Whether the browser is usable right now: the SOCKS5 listener is up and
-    /// either the tunnel is connected or the set is a partial split (off-list
-    /// targets browse directly). A full-tunnel drop blocks browsing.
-    var canBrowse: Bool { socksAlive && (tunnelConnected || !isFullTunnel) }
+    /// Whether the browser is usable right now. Fails closed to match the core,
+    /// which routes nothing until the first handshake learns the tunnel set: the
+    /// SOCKS5 listener must be up and either the tunnel is connected or the route
+    /// policy is known to be a partial split (off-list targets browse directly).
+    /// While `forwardedRoutes` is still nil (pre-handshake or mid-relaunch) or the
+    /// set is full-tunnel while the link is down, browsing stays blocked.
+    var canBrowse: Bool {
+        guard socksAlive else { return false }
+        if tunnelConnected { return true }
+        guard let routes = forwardedRoutes else { return false }
+        return !routes.isFullTunnel
+    }
 
     init() {
         flextunnel_init_logging()
