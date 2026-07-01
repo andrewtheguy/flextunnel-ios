@@ -3,7 +3,7 @@
 An iOS browser for reaching **private resources** — hosts on your server's
 network by **hostname** (including names that only resolve via the server's DNS),
 the server's own `localhost`, or hosts by **IP** — without a VPN. It's the iOS
-client for [flextunnel](../flextunnel), a SOCKS5-over-QUIC proxy where the
+client for [flextunnel](https://github.com/andrewtheguy/flextunnel), a SOCKS5-over-QUIC proxy where the
 **server** makes the outbound TCP connection from its own network, resolving DNS
 server-side when the target is a hostname. Because the transport is [iroh](https://www.iroh.computer/)
 QUIC (NAT traversal, relay fallback, TLS 1.3), the app dials the server by its
@@ -137,7 +137,7 @@ independently as a **whitelist** (defense in depth), rejecting any tunnel reques
 for an off-list target. Off-list hosts are **always direct-connected** today
 (never blocked client-side). A future client-side blocking mode is on the roadmap
 — see "Routed-set split-tunneling → Roadmap" in the
-[flextunnel README](../flextunnel/README.md).
+[flextunnel README](https://github.com/andrewtheguy/flextunnel/blob/main/README.md).
 
 ## Verifying server-side DNS
 
