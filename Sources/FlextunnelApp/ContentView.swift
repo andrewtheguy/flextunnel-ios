@@ -3,10 +3,51 @@ import UIKit
 
 struct ContentView: View {
     /// What a successful connect presents: the in-app browser, or the proxy-only
-    /// screen (SOCKS + port forwards for other apps, no browser).
-    private enum SessionMode {
+    /// screen (SOCKS + port forwards for other apps, no browser). Raw values are
+    /// the AppStorage encoding of the remembered choice.
+    private enum SessionMode: String {
         case browser
         case proxyOnly
+
+        var title: String {
+            switch self {
+            case .browser: return "Browse the web"
+            case .proxyOnly: return "Forward ports"
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .browser:
+                return "Open the built-in browser through the tunnel. "
+                    + "Private hostnames resolve on the server."
+            case .proxyOnly:
+                return "Run the proxy without the browser and forward local ports "
+                    + "to private hosts, so other apps on this device "
+                    + "(SSH, RDP, databases…) can reach them at 127.0.0.1."
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .browser: return "safari.fill"
+            case .proxyOnly: return "app.connected.to.app.below.fill"
+            }
+        }
+
+        var cta: String {
+            switch self {
+            case .browser: return "Start Browsing"
+            case .proxyOnly: return "Start Port Forwarding"
+            }
+        }
+
+        var connectingLabel: String {
+            switch self {
+            case .browser: return "Starting browser session…"
+            case .proxyOnly: return "Starting port forwarding…"
+            }
+        }
     }
 
     @StateObject private var proxy = ProxyController()
@@ -22,8 +63,15 @@ struct ContentView: View {
     // save on `.connected` persists the exact token that authenticated — not
     // whatever the (still-editable) field holds by the time the handshake lands.
     @State private var connectingSettings: ProxyController.Settings?
-    @State private var sessionMode: SessionMode = .browser
+    // Remembered across launches: both modes share the config above, so the
+    // choice is sticky and only the single CTA's label follows it.
+    @AppStorage("lastSessionMode") private var sessionModeRaw = SessionMode.browser.rawValue
     @State private var proxyOnlyActive = false
+
+    private var sessionMode: SessionMode {
+        get { SessionMode(rawValue: sessionModeRaw) ?? .browser }
+        nonmutating set { sessionModeRaw = newValue.rawValue }
+    }
 
     // Best-effort background keep-alive: buys ~30s of runtime after backgrounding
     // so the SOCKS listener and port forwards outlive a brief app switch.
@@ -68,11 +116,26 @@ struct ContentView: View {
                     }
                 }
 
+                // Both modes share the config above; pick one, and the single
+                // CTA below takes its label from the choice.
+                Section("Use the tunnel to") {
+                    ForEach([SessionMode.browser, .proxyOnly], id: \.rawValue) { mode in
+                        ModeChoiceRow(
+                            icon: mode.icon,
+                            title: mode.title,
+                            description: mode.description,
+                            isSelected: sessionMode == mode,
+                            disabled: proxy.phase == .connecting) {
+                            sessionMode = mode
+                        }
+                    }
+                }
+
                 Section {
                     if proxy.phase == .connecting {
                         HStack(spacing: 12) {
                             ProgressView()
-                            Text("Connecting to server…")
+                            Text(sessionMode.connectingLabel)
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Button("Cancel") { proxy.stop() }
@@ -82,23 +145,12 @@ struct ContentView: View {
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                     } else {
-                        VStack(spacing: 10) {
-                            Button("Start proxy") {
-                                startProxy(mode: .browser)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
-                            .frame(maxWidth: .infinity)
-
-                            // Same tunnel, no browser: run SOCKS5 + port forwards
-                            // for other apps on this device.
-                            Button("Start proxy only (no browser)") {
-                                startProxy(mode: .proxyOnly)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
-                            .frame(maxWidth: .infinity)
+                        Button(sessionMode.cta) {
+                            startProxy(mode: sessionMode)
                         }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .frame(maxWidth: .infinity)
                         .disabled(!canStartProxy)
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
@@ -295,6 +347,52 @@ struct ContentView: View {
         guard backgroundTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(backgroundTask)
         backgroundTask = .invalid
+    }
+}
+
+/// A radio-style choice row for one tunnel mode: icon, title, short
+/// description, and a trailing selection mark. The CTA lives below the list
+/// and takes its label from the selected mode.
+private struct ModeChoiceRow: View {
+    let icon: String
+    let title: String
+    let description: String
+    let isSelected: Bool
+    let disabled: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .frame(width: 28)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(description)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color(.tertiaryLabel))
+                    .padding(.top, 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .padding(.vertical, 4)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
