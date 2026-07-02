@@ -173,6 +173,15 @@ final class ProxyController: ObservableObject {
         start(lastSettings)
     }
 
+    /// Called on return to foreground. `connectDeadline` is wall-clock, so time
+    /// spent suspended would count against a still-pending first connect and
+    /// fail it spuriously on the first resumed poll; grant a fresh window.
+    func noteForegrounded() {
+        if phase == .connecting, connectDeadline != nil {
+            connectDeadline = Date().addingTimeInterval(Self.connectTimeout)
+        }
+    }
+
     private func stopPolling() {
         healthTimer?.invalidate()
         healthTimer = nil
