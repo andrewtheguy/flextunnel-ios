@@ -191,14 +191,15 @@ private final class Relay {
 
     func start(on queue: DispatchQueue) {
         outbound.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
             switch state {
             case .ready:
-                self?.pump(from: self!.inbound, to: self!.outbound)
-                self?.pump(from: self!.outbound, to: self!.inbound)
+                self.pump(from: self.inbound, to: self.outbound)
+                self.pump(from: self.outbound, to: self.inbound)
             case .waiting, .failed, .cancelled:
                 // .waiting would retry forever (e.g. SOCKS listener down, target
                 // rejected); a forwarded client is better served by a fast close.
-                self?.close()
+                self.close()
             default:
                 break
             }

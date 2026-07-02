@@ -34,7 +34,7 @@ enum RouteMatch {
     /// IPv4 CIDR containment (`10.0.0.0/8`); a bare IP matches as /32.
     private static func cidrContains(_ cidr: String, _ ip: IPv4Address) -> Bool {
         let parts = cidr.split(separator: "/")
-        guard let base = IPv4Address(String(parts[0])) else { return false }
+        guard let first = parts.first, let base = IPv4Address(String(first)) else { return false }
         let bits: UInt32
         switch parts.count {
         case 1: bits = 32
