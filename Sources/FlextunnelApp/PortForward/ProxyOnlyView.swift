@@ -146,7 +146,7 @@ struct ProxyOnlyView: View {
         } header: {
             Text("Port forwards")
         } footer: {
-            Text("Forwards listen on 127.0.0.1 and are reachable from other apps on this device while flextunnel is running. iOS suspends the app shortly after backgrounding; forwards resume when you return.")
+            Text("Forwards listen on localhost (127.0.0.1 and ::1) and are reachable from other apps on this device while flextunnel is running. iOS suspends the app shortly after backgrounding; forwards resume when you return.")
         }
     }
 

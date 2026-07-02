@@ -36,6 +36,6 @@ struct PortForward: Identifiable, Codable, Equatable {
     }
 
     var routeDescription: String {
-        "127.0.0.1:\(localPort) → \(remoteHost):\(remotePort)"
+        "localhost:\(localPort) → \(remoteHost):\(remotePort)"
     }
 }

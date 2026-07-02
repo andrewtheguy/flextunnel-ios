@@ -8,9 +8,15 @@ enum PortForwardState: Equatable {
     case failed(String)
 }
 
-/// Serves one `PortForward`: accepts TCP connections on 127.0.0.1:<localPort>
-/// and relays each to the remote target through the in-app SOCKS5 listener, so
-/// the core's split-tunnel routing applies exactly as it does for the browser.
+/// Serves one `PortForward`: accepts TCP connections on the local port and
+/// relays each to the remote target through the in-app SOCKS5 listener, so the
+/// core's split-tunnel routing applies exactly as it does for the browser.
+///
+/// Unlike the SOCKS bind (IPv4-only, bound by the core), a forward listens on
+/// **both loopback stacks** — 127.0.0.1 and ::1 — because it exists for other
+/// apps on the device, and a client connecting to `localhost` may try ::1
+/// first. The forward is usable while either stack is bound; it only reports
+/// failure when both are down.
 ///
 /// All state is confined to `queue`; Network.framework delivers every callback
 /// there via `start(queue:)`. `onStatus` is invoked on that queue too — the
@@ -19,10 +25,18 @@ final class PortForwarder {
     /// Called on `queue` with (listener state, active connection count).
     var onStatus: ((PortForwardState, Int) -> Void)?
 
+    private enum ListenerState {
+        case pending
+        case ready
+        case failed(String)
+    }
+
     private let forward: PortForward
     private let socksPort: UInt16
     private let queue: DispatchQueue
-    private var listener: NWListener?
+    /// Keyed by loopback host ("127.0.0.1" / "::1").
+    private var listeners: [String: NWListener] = [:]
+    private var listenerStates: [String: ListenerState] = [:]
     private var relays: [Relay] = []
     private var state: PortForwardState = .stopped
 
@@ -33,16 +47,20 @@ final class PortForwarder {
     }
 
     func start() {
-        queue.async { self.startListener() }
+        queue.async {
+            self.startListener(host: "127.0.0.1")
+            self.startListener(host: "::1")
+        }
     }
 
-    /// Stops the listener and drops every relay. Silences `onStatus` first so a
-    /// late callback can't overwrite the owner's own "stopped" bookkeeping.
+    /// Stops the listeners and drops every relay. Silences `onStatus` first so
+    /// a late callback can't overwrite the owner's own "stopped" bookkeeping.
     func cancel() {
         queue.async {
             self.onStatus = nil
-            self.listener?.cancel()
-            self.listener = nil
+            self.listeners.values.forEach { $0.cancel() }
+            self.listeners.removeAll()
+            self.listenerStates.removeAll()
             let open = self.relays
             self.relays.removeAll()
             open.forEach { $0.close() }
@@ -50,21 +68,21 @@ final class PortForwarder {
         }
     }
 
-    // MARK: - Listener (on queue)
+    // MARK: - Listeners (on queue)
 
-    private func startListener() {
+    private func startListener(host: String) {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         // Loopback only: reachable from other apps on the device, never the LAN.
         params.requiredLocalEndpoint = NWEndpoint.hostPort(
-            host: "127.0.0.1",
+            host: NWEndpoint.Host(host),
             port: NWEndpoint.Port(rawValue: forward.localPort)!)
 
         let listener: NWListener
         do {
             listener = try NWListener(using: params)
         } catch {
-            report(.failed(error.localizedDescription))
+            recordListenerFailure(host, reason: error.localizedDescription)
             return
         }
 
@@ -72,17 +90,15 @@ final class PortForwarder {
             guard let self else { return }
             switch state {
             case .ready:
-                self.report(.listening)
+                self.listenerStates[host] = .ready
+                self.recomputeState()
             case .failed(let error):
-                self.listener?.cancel()
-                self.listener = nil
+                self.listeners.removeValue(forKey: host)?.cancel()
                 if case .posix(.EADDRINUSE) = error {
-                    self.report(.failed("port \(self.forward.localPort) is in use"))
+                    self.recordListenerFailure(host, reason: "port \(self.forward.localPort) is in use")
                 } else {
-                    self.report(.failed(error.localizedDescription))
+                    self.recordListenerFailure(host, reason: error.localizedDescription)
                 }
-            case .cancelled:
-                self.report(.stopped)
             default:
                 break
             }
@@ -90,8 +106,35 @@ final class PortForwarder {
         listener.newConnectionHandler = { [weak self] inbound in
             self?.accept(inbound)
         }
-        self.listener = listener
+        listeners[host] = listener
+        listenerStates[host] = .pending
         listener.start(queue: queue)
+    }
+
+    private func recordListenerFailure(_ host: String, reason: String) {
+        listenerStates[host] = .failed(reason)
+        recomputeState()
+    }
+
+    /// One usable stack is enough to be "listening"; failure is reported only
+    /// once every listener has failed (pending ones may still come up).
+    private func recomputeState() {
+        var failures: [String] = []
+        var hasPending = false
+        for state in listenerStates.values {
+            switch state {
+            case .ready:
+                report(.listening)
+                return
+            case .failed(let reason):
+                failures.append(reason)
+            case .pending:
+                hasPending = true
+            }
+        }
+        if !hasPending, let reason = failures.first {
+            report(.failed(reason))
+        }
     }
 
     private func accept(_ inbound: NWConnection) {

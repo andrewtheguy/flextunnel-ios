@@ -145,7 +145,8 @@ for an off-list target. Off-list hosts are **always direct-connected** today
 SOCKS5 core without the browser, for **other apps on this device**: they can use
 the SOCKS5 proxy at `127.0.0.1:<SOCKS bind port>` directly, or connect to
 managed **port forwards** — loopback TCP listeners
-(`127.0.0.1:<local port> → remote host:port`) relayed through the core, so the
+(`localhost:<local port> → remote host:port`, bound on both 127.0.0.1 and ::1)
+relayed through the core, so the
 same split-tunnel routing applies (server-side DNS for tunneled targets).
 Forwards persist, auto-start with the proxy, and keep serving best-effort for
 ~30 s after backgrounding (no Network Extension — iOS then suspends the app

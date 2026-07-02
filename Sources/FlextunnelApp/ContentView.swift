@@ -24,7 +24,7 @@ struct ContentView: View {
             case .proxyOnly:
                 return "Run the proxy without the browser and forward local ports "
                     + "to private hosts, so other apps on this device "
-                    + "(SSH, RDP, databases…) can reach them at 127.0.0.1."
+                    + "(SSH, RDP, databases…) can reach them at localhost."
             }
         }
 

@@ -6,19 +6,25 @@ loopback SOCKS5 listener plus the QUIC link to your server) but presents a
 status-and-forwards screen instead of the browser. The point is to serve **other
 apps on the device**: iOS loopback is shared across processes, so anything you
 run — an SSH client, RDP viewer, database GUI, another browser — can reach
-`127.0.0.1:<port>` endpoints this app provides while it is alive.
+`localhost:<port>` endpoints this app provides while it is alive.
 
 Two things are on offer in that mode:
 
 - the **SOCKS5 proxy itself** at `127.0.0.1:<SOCKS bind port>` (default 18080),
   for client apps that speak SOCKS5;
-- **port forwards** — plain TCP listeners on `127.0.0.1:<local port>` that relay
+- **port forwards** — plain TCP listeners on `localhost:<local port>` that relay
   every accepted connection to a fixed `remote host:port` through the core, for
   client apps that don't.
 
+Unlike the SOCKS bind (IPv4-only, bound by the Rust core), each forward listens
+on **both loopback stacks** — `127.0.0.1` and `::1` — because client apps
+connecting to `localhost` may try IPv6 first. A forward is usable while either
+stack is bound and reports failure only when both are down. Either way nothing
+is ever exposed on the LAN.
+
 ## Port forwards
 
-A forward is `127.0.0.1:<local port> → <remote host>:<remote port>`. Each
+A forward is `localhost:<local port> → <remote host>:<remote port>`. Each
 accepted connection is relayed through the in-app SOCKS5 listener, so the core
 applies exactly the same routing as the browser:
 
