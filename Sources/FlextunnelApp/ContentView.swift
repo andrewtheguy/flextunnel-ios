@@ -1,7 +1,57 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
+    /// What a successful connect presents: the in-app browser, or the proxy-only
+    /// screen (SOCKS + port forwards for other apps, no browser). Raw values are
+    /// the AppStorage encoding of the remembered choice.
+    private enum SessionMode: String {
+        case browser
+        case proxyOnly
+
+        var title: String {
+            switch self {
+            case .browser: return "Browse the web"
+            case .proxyOnly: return "Forward ports"
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .browser:
+                return "Open the built-in browser through the tunnel. "
+                    + "Private hostnames resolve on the server."
+            case .proxyOnly:
+                return "Run the proxy without the browser and forward local ports "
+                    + "to private hosts, so other apps on this device "
+                    + "(SSH, RDP, databases…) can reach them at localhost."
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .browser: return "safari.fill"
+            case .proxyOnly: return "app.connected.to.app.below.fill"
+            }
+        }
+
+        var cta: String {
+            switch self {
+            case .browser: return "Start Browsing"
+            case .proxyOnly: return "Start Port Forwarding"
+            }
+        }
+
+        var connectingLabel: String {
+            switch self {
+            case .browser: return "Starting browser session…"
+            case .proxyOnly: return "Starting port forwarding…"
+            }
+        }
+    }
+
     @StateObject private var proxy = ProxyController()
+    @StateObject private var portForwards = PortForwardController()
 
     @AppStorage("lastServerNodeID") private var serverNodeID = ""
     @State private var authToken = ""
@@ -13,6 +63,20 @@ struct ContentView: View {
     // save on `.connected` persists the exact token that authenticated — not
     // whatever the (still-editable) field holds by the time the handshake lands.
     @State private var connectingSettings: ProxyController.Settings?
+    // Remembered across launches: both modes share the config above, so the
+    // choice is sticky and only the single CTA's label follows it.
+    @AppStorage("lastSessionMode") private var sessionModeRaw = SessionMode.browser.rawValue
+    @State private var proxyOnlyActive = false
+
+    private var sessionMode: SessionMode {
+        get { SessionMode(rawValue: sessionModeRaw) ?? .browser }
+        nonmutating set { sessionModeRaw = newValue.rawValue }
+    }
+
+    // Best-effort background keep-alive: buys ~30s of runtime after backgrounding
+    // so the SOCKS listener and port forwards outlive a brief app switch.
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     // Owned here so bookmarks/history survive BrowserModel being recreated when
     // the proxy port changes.
@@ -52,11 +116,26 @@ struct ContentView: View {
                     }
                 }
 
+                // Both modes share the config above; pick one, and the single
+                // CTA below takes its label from the choice.
+                Section("Use the tunnel to") {
+                    ForEach([SessionMode.browser, .proxyOnly], id: \.rawValue) { mode in
+                        ModeChoiceRow(
+                            icon: mode.icon,
+                            title: mode.title,
+                            description: mode.description,
+                            isSelected: sessionMode == mode,
+                            disabled: proxy.phase == .connecting) {
+                            sessionMode = mode
+                        }
+                    }
+                }
+
                 Section {
                     if proxy.phase == .connecting {
                         HStack(spacing: 12) {
                             ProgressView()
-                            Text("Connecting to server…")
+                            Text(sessionMode.connectingLabel)
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Button("Cancel") { proxy.stop() }
@@ -66,10 +145,8 @@ struct ContentView: View {
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                     } else {
-                        Button("Start proxy") {
-                            let settings = currentSettings()
-                            connectingSettings = settings
-                            proxy.start(settings)
+                        Button(sessionMode.cta) {
+                            startProxy(mode: sessionMode)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
@@ -94,6 +171,19 @@ struct ContentView: View {
                         .interactiveDismissDisabled(proxy.socksPort != nil)
                 }
             }
+            .fullScreenCover(isPresented: proxyOnlyIsPresented) {
+                ProxyOnlyView(
+                    proxy: proxy,
+                    store: portForwards,
+                    onStop: {
+                        proxy.stop()
+                        // Explicitly drop the cover: the binding's setter only
+                        // runs on a dismissal attempt, so stopping alone would
+                        // leave the screen up showing a dead proxy.
+                        proxyOnlyActive = false
+                    })
+                    .interactiveDismissDisabled(proxy.socksPort != nil)
+            }
             .onChange(of: proxy.phase) { _, newPhase in
                 // Persist the token only once it has actually authenticated, so a
                 // typo'd credential (which starts fine but fails the handshake)
@@ -102,12 +192,20 @@ struct ContentView: View {
                 if newPhase == .connected, let token = connectingSettings?.authToken {
                     TokenStore.save(token)
                 }
-                syncBrowserPresentation()
+                syncSessionPresentation()
             }
-            .onChange(of: proxy.socksPort) { syncBrowserPresentation() }
+            .onChange(of: proxy.socksPort) {
+                syncSessionPresentation()
+                syncForwards()
+            }
+            .onChange(of: proxy.socksAlive) { syncForwards() }
+            .onChange(of: scenePhase) { _, phase in
+                handleScenePhase(phase)
+            }
             .onAppear {
                 loadStoredToken()
-                syncBrowserPresentation()
+                syncSessionPresentation()
+                syncForwards()
             }
         }
     }
@@ -120,6 +218,25 @@ struct ContentView: View {
                 browserModel = nil
             }
         }
+    }
+
+    /// Mirror of `browserIsPresented`: a tunnel drop never dismisses the screen;
+    /// only an explicit Stop (socksPort == nil) lets the cover go.
+    private var proxyOnlyIsPresented: Binding<Bool> {
+        Binding {
+            proxyOnlyActive
+        } set: { isPresented in
+            if !isPresented, proxy.socksPort == nil {
+                proxyOnlyActive = false
+            }
+        }
+    }
+
+    private func startProxy(mode: SessionMode) {
+        sessionMode = mode
+        let settings = currentSettings()
+        connectingSettings = settings
+        proxy.start(settings)
     }
 
     private var trimmedServerNodeID: String {
@@ -177,20 +294,105 @@ struct ContentView: View {
         }
     }
 
-    /// Present-only: create the browser once the handshake lands and never tear
-    /// it down here. A drop after connecting keeps the browser up (the tunnel
-    /// auto-reconnects behind an overlay); teardown happens solely through the
-    /// explicit-quit path — `stopAndDismiss` → `proxy.stop()` (socksPort == nil)
-    /// → the `browserIsPresented` setter clears `browserModel`.
-    private func syncBrowserPresentation() {
+    /// Present-only: reveal the mode's screen once the handshake lands and never
+    /// tear it down here. A drop after connecting keeps it up (the tunnel
+    /// auto-reconnects); teardown happens solely through the explicit-quit path —
+    /// Stop → `proxy.stop()` (socksPort == nil) → the presentation binding's
+    /// setter clears the state.
+    private func syncSessionPresentation() {
         guard proxy.phase == .connected, let socksPort = proxy.socksPort else { return }
 
-        if browserModel == nil {
-            browserModel = BrowserModel(socksPort: socksPort, library: library)
-        } else if browserModel?.socksPort != socksPort {
-            browserModel?.stopAll()
-            browserModel = BrowserModel(socksPort: socksPort, library: library)
+        switch sessionMode {
+        case .browser:
+            if browserModel == nil {
+                browserModel = BrowserModel(socksPort: socksPort, library: library)
+            } else if browserModel?.socksPort != socksPort {
+                browserModel?.stopAll()
+                browserModel = BrowserModel(socksPort: socksPort, library: library)
+            }
+        case .proxyOnly:
+            proxyOnlyActive = true
         }
+    }
+
+    /// Keep the enabled forwards' lifecycles tied to the SOCKS listener: start
+    /// when it's alive, stop when it goes away, rebind on a port change. Runs in
+    /// both modes — the forwards are useful while browsing too.
+    private func syncForwards() {
+        portForwards.syncProxy(socksAlive: proxy.socksAlive, socksPort: proxy.socksPort)
+    }
+
+    // MARK: - Background keep-alive
+
+    /// Best-effort only: extended execution buys ~30s after backgrounding, then
+    /// iOS suspends the process (sockets survive; the core reconnects the tunnel
+    /// link on its own once resumed). No Network Extension, so nothing stronger
+    /// is available.
+    private func handleScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .background:
+            guard proxy.socksPort != nil, backgroundTask == .invalid else { break }
+            backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "flextunnel-proxy") {
+                endBackgroundTask()
+            }
+        case .active:
+            endBackgroundTask()
+            proxy.noteForegrounded()
+        default:
+            break
+        }
+    }
+
+    private func endBackgroundTask() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+    }
+}
+
+/// A radio-style choice row for one tunnel mode: icon, title, short
+/// description, and a trailing selection mark. The CTA lives below the list
+/// and takes its label from the selected mode.
+private struct ModeChoiceRow: View {
+    let icon: String
+    let title: String
+    let description: String
+    let isSelected: Bool
+    let disabled: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .frame(width: 28)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(description)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color(.tertiaryLabel))
+                    .padding(.top, 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .padding(.vertical, 4)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

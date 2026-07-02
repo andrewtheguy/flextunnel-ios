@@ -1,7 +1,7 @@
 # flextunnel-ios
 
-An iOS browser for reaching **private resources** — hosts on your server's
-network by **hostname** (including names that only resolve via the server's DNS),
+An iOS app for reaching **private resources** — hosts on your server's network
+by **hostname** (including names that only resolve via the server's DNS),
 the server's own `localhost`, or hosts by **IP** — without a VPN. It's the iOS
 client for [flextunnel](https://github.com/andrewtheguy/flextunnel), a SOCKS5-over-QUIC proxy where the
 **server** makes the outbound TCP connection from its own network, resolving DNS
@@ -10,27 +10,27 @@ QUIC (NAT traversal, relay fallback, TLS 1.3), the app dials the server by its
 endpoint id — the server needs no public inbound port, and neither end needs
 root or a TUN device.
 
-This is a **private-network access browser**, not a privacy/anonymity browser: it
-behaves like a mainstream browser and split-tunnels by default. The flextunnel
-Rust core is embedded on-device (via `libflextunnel.xcframework`) and runs a
-local SOCKS5 listener on loopback; the SwiftUI `WebView` routes all its traffic
-through that listener via `WKWebsiteDataStore.proxyConfigurations`.
+There are two ways to use the tunnel, chosen on the setup screen:
 
-## How routing works
+- **Browse the web** — a built-in browser routed through the tunnel. This is a
+  **private-network access browser**, not a privacy/anonymity browser: it
+  behaves like a mainstream browser and split-tunnels by default. The flextunnel
+  Rust core is embedded on-device (via `libflextunnel.xcframework`) and runs a
+  local SOCKS5 listener on loopback; the SwiftUI `WebView` routes all its
+  traffic through that listener via `WKWebsiteDataStore.proxyConfigurations`.
+- **Forward ports** — run the proxy without the browser and forward local
+  `localhost` ports to private hosts, so other apps on the device (SSH, RDP,
+  databases…) can reach them.
 
-The server defines a **tunnel set** — the domains/CIDRs it will route — and pushes
-it to the client during the handshake. The on-device core tunnels requests to
-**on-list** destinations through the QUIC connection (resolved and connected
-server-side) and **direct-connects** everything off-list. This split-tunnel
-behavior is the default; a server whose set matches everything (`*` /
-`0.0.0.0/0`) routes all traffic. The server independently enforces the same set
-as a whitelist (defense in depth). The app surfaces the active set, health, and
-bound port under **Tunnel status**.
+## Documentation
 
-The routing decision lives in the Rust core rather than the WebView because iOS
-`WKWebsiteDataStore.proxyConfigurations` is global — every WebView request hits
-the local SOCKS5 proxy with no per-host routing — so the core is what decides
-tunnel-vs-direct per destination.
+- [Split-tunnel routing](docs/split-tunnel-routing.md) — how tunnel-vs-direct is
+  decided, the server-pushed tunnel set, and verifying server-side DNS.
+- [Proxy-only mode & port forwarding](docs/port-forwarding.md) — the SOCKS5
+  endpoint and localhost port forwards for other apps, background behavior,
+  what forwards are good for, and troubleshooting.
+- [Local FFI development](docs/local-ffi-development.md) — building against a
+  local `../flextunnel` Rust checkout instead of the pinned release.
 
 ## Prerequisites
 
@@ -43,6 +43,8 @@ Swift package, `Packages/Flextunnel`. Its binary target downloads the **pinned
 release zip** by URL + checksum, so a clean checkout builds reproducibly — there's
 no vendored copy to stage. To move to a new release, run
 `scripts/bump-xcframework.sh <tag>` (rewrites the url + checksum).
+
+## Build & run
 
 1. **Generate the Xcode project** (Xcode resolves and downloads the package on
    first build):
@@ -70,30 +72,9 @@ no vendored copy to stage. To move to a new release, run
    - *Relay URLs* — optional hints; leave blank for iroh defaults.
    - *SOCKS bind port* — the loopback port the core binds.
 
-   Tap **Start proxy**, then browse. The **Tunnel status** button shows health,
-   the bound port, and the active split-tunnel set.
-
-### Developing against a local Rust build (FFI)
-
-To iterate on the Rust FFI without cutting a release, build the sibling and set
-`FLEXTUNNEL_LOCAL_XCFRAMEWORK=1` — the package's binary target then links the
-sibling's `dist/ios` build (reached via the committed symlink
-`Packages/Flextunnel/local/libflextunnel.xcframework`) instead of the released zip:
-
-```sh
-cd ../flextunnel && ./build-ios.sh release
-cd ../flextunnel-ios
-FLEXTUNNEL_LOCAL_XCFRAMEWORK=1 xcodegen generate
-FLEXTUNNEL_LOCAL_XCFRAMEWORK=1 xcodebuild -project Flextunnel.xcodeproj \
-  -scheme FlextunnelApp \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.2' build
-```
-
-The var is read when Swift Package Manager evaluates `Package.swift`, so it must
-be set for both `xcodegen`/resolution and the build. In the Xcode GUI, export it
-before launching (`launchctl setenv FLEXTUNNEL_LOCAL_XCFRAMEWORK 1`, then restart
-Xcode) since scheme env vars don't reach package resolution. Rebuild the sibling
-and the next app build picks it up. Unset it to return to the pinned release.
+   Pick **Browse the web** or **Forward ports**, then tap the start button.
+   Tunnel health, the bound port, and the active split-tunnel set are shown
+   under **Tunnel status** in the browser, or on the port-forwarding screen.
 
 ## Archive & deploy (signed .ipa)
 
@@ -121,33 +102,6 @@ from `Developer.local.xcconfig` (gitignored, per-developer) or a `--team-id` fla
    `--allow-provisioning-updates` to let Xcode create/update signing assets.
    See `scripts/create-archive-ios.sh --help` for all options (configuration,
    output paths, and export method, which defaults to `debugging`).
-
-## Split-tunnel routing (the tunnel set)
-
-iOS `WKWebsiteDataStore.proxyConfigurations` is global — every WebView request
-goes to the local SOCKS5 proxy, with no per-host routing. So the routing decision
-is made in the Rust library, not the WebView: the on-device proxy tunnels
-on-list destinations and connects everything else directly.
-
-The tunnel set (the routed domains/CIDRs) is **defined on the server** and pushed
-to the client during the handshake; the app surfaces it under **Tunnel status**
-(tunneled domains/CIDRs, or "Full tunnel (all traffic)" when the set routes
-everything via `*` / `0.0.0.0/0`). The server also enforces the same set
-independently as a **whitelist** (defense in depth), rejecting any tunnel request
-for an off-list target. Off-list hosts are **always direct-connected** today
-(never blocked client-side). A future client-side blocking mode is on the roadmap
-— see "Routed-set split-tunneling → Roadmap" in the
-[flextunnel README](https://github.com/andrewtheguy/flextunnel/blob/main/README.md).
-
-## Verifying server-side DNS
-
-Run the flextunnel **server** with `RUST_LOG=info`. Browsing a tunneled host
-should log `ATYP_DOMAIN (remote DNS, resolved on server)` per CONNECT — **not**
-`ATYP_IP`. For a definitive check, add a hostname that only resolves on the
-server's network (e.g. in the server host's `/etc/hosts`) and load it from the
-app; if it loads, DNS happened on the server. (If you instead see `ATYP_IP`,
-Network framework pre-resolved locally — fall back to an HTTP-CONNECT proxy
-front-end.)
 
 ## Notes
 
