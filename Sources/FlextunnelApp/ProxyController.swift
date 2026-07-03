@@ -69,6 +69,10 @@ final class ProxyController: ObservableObject {
         var connected: Bool
         var domains: [String]
         var cidrs: [String]
+        /// Server-side host aliases (`alias -> target`), informational only —
+        /// the server resolves them; shown in the status popover like the
+        /// server status page shows them.
+        var hostAliases: [(alias: String, target: String)]
 
         /// A `*` domain or a default-route CIDR means everything is tunneled, so a
         /// tunnel drop is a full outage (nothing is off-list to browse directly).
@@ -282,10 +286,16 @@ final class ProxyController: ObservableObject {
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
 
+        // host_aliases is a JSON array of [alias, target] pairs.
+        let hostAliases = (obj["host_aliases"] as? [[String]] ?? [])
+            .compactMap { pair -> (alias: String, target: String)? in
+                pair.count == 2 ? (alias: pair[0], target: pair[1]) : nil
+            }
         forwardedRoutes = ForwardedRoutes(
             connected: obj["connected"] as? Bool ?? false,
             domains: obj["domains"] as? [String] ?? [],
-            cidrs: obj["cidrs"] as? [String] ?? [])
+            cidrs: obj["cidrs"] as? [String] ?? [],
+            hostAliases: hostAliases)
     }
 
     deinit {

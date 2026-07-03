@@ -1105,6 +1105,12 @@ private struct TunnelStatusPopover: View {
                     DetailRow("Tunneled CIDRs", routes.cidrs.joined(separator: "\n"), monospace: true)
                 }
             }
+            if !routes.hostAliases.isEmpty {
+                DetailRow(
+                    "Host aliases",
+                    routes.hostAliases.map { "\($0.alias) → \($0.target)" }.joined(separator: "\n"),
+                    monospace: true)
+            }
         }
     }
 
