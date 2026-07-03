@@ -119,6 +119,18 @@ struct ProxyOnlyView: View {
                     InfoRow("Tunneled CIDRs", routes.cidrs.joined(separator: "\n"), monospace: true)
                 }
             }
+            if !routes.hostAliases.isEmpty {
+                InfoRow(
+                    "Host aliases",
+                    routes.hostAliases.map { "\($0.alias) → \($0.target)" }.joined(separator: "\n"),
+                    monospace: true)
+            }
+            if !routes.agentAliases.isEmpty {
+                InfoRow(
+                    "Agent routes",
+                    routes.agentAliases.joined(separator: "\n"),
+                    monospace: true)
+            }
         }
     }
 
