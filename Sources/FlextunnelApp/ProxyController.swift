@@ -73,6 +73,8 @@ final class ProxyController: ObservableObject {
         /// the server resolves them; shown in the status popover like the
         /// server status page shows them.
         var hostAliases: [(alias: String, target: String)]
+        /// Reverse-routing (agent) alias names, informational only.
+        var agentAliases: [String]
 
         /// A `*` domain or a default-route CIDR means everything is tunneled, so a
         /// tunnel drop is a full outage (nothing is off-list to browse directly).
@@ -295,7 +297,8 @@ final class ProxyController: ObservableObject {
             connected: obj["connected"] as? Bool ?? false,
             domains: obj["domains"] as? [String] ?? [],
             cidrs: obj["cidrs"] as? [String] ?? [],
-            hostAliases: hostAliases)
+            hostAliases: hostAliases,
+            agentAliases: obj["agent_aliases"] as? [String] ?? [])
     }
 
     deinit {

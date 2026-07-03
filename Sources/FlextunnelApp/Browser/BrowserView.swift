@@ -1111,6 +1111,12 @@ private struct TunnelStatusPopover: View {
                     routes.hostAliases.map { "\($0.alias) → \($0.target)" }.joined(separator: "\n"),
                     monospace: true)
             }
+            if !routes.agentAliases.isEmpty {
+                DetailRow(
+                    "Agent routes",
+                    routes.agentAliases.joined(separator: "\n"),
+                    monospace: true)
+            }
         }
     }
 
