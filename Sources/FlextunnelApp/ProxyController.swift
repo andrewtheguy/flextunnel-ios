@@ -34,6 +34,10 @@ final class ProxyController: ObservableObject {
     /// The tunnel link to the server is up (handshake live). On-list targets (in
     /// the routed tunnel set) only work while this is true; off-list targets don't.
     @Published var tunnelConnected: Bool = false
+    /// The tunnel link has been down for longer than `reconnectGrace` while the
+    /// SOCKS loop stayed alive: the core's own reconnect is presumed stuck, so
+    /// the UI shows a disconnected state and offers a manual Retry.
+    @Published private(set) var tunnelStuck: Bool = false
     /// Non-secret settings for the currently running proxy, safe to show in UI.
     @Published private(set) var connectionSummary: ConnectionSummary?
     /// The tunnel set the server pushed: domains/CIDRs routed through the tunnel.
@@ -45,6 +49,10 @@ final class ProxyController: ObservableObject {
     /// Give up on a stalled first handshake after this long.
     private static let connectTimeout: TimeInterval = 20
     private var connectDeadline: Date?
+    /// When the tunnel link dropped while connected; nil while the link is up.
+    private var linkDownSince: Date?
+    /// A link down longer than this stops reading as a transient reconnect.
+    private static let reconnectGrace: TimeInterval = 30
     /// Last settings that drove a launch, replayed by the manual Reconnect.
     private var lastSettings: Settings?
 
@@ -225,6 +233,8 @@ final class ProxyController: ObservableObject {
         socksPort = nil
         socksAlive = false
         tunnelConnected = false
+        linkDownSince = nil
+        tunnelStuck = false
         connectionSummary = nil
         forwardedRoutes = nil
     }
@@ -262,6 +272,8 @@ final class ProxyController: ObservableObject {
                 // popover can offer a manual Reconnect.
                 socksAlive = false
                 tunnelConnected = false
+                linkDownSince = nil
+                tunnelStuck = false
                 status = "proxy stopped — tap Reconnect"
                 stopPolling()
             case .idle, .failed:
@@ -273,6 +285,7 @@ final class ProxyController: ObservableObject {
         socksAlive = true
         refreshRoutes()
         tunnelConnected = forwardedRoutes?.connected == true
+        trackLinkOutage()
 
         switch phase {
         case .connecting:
@@ -286,12 +299,33 @@ final class ProxyController: ObservableObject {
             // A tunnel-link drop is not a failure: the core keeps SOCKS5 serving
             // (off-list still browses) and reconnects on its own. Reflect the link
             // state; on-list targets fail per-tab until it recovers.
-            status = tunnelConnected
-                ? connectedStatus
-                : "tunnel reconnecting — off-list browsing active"
+            if tunnelConnected {
+                status = connectedStatus
+            } else if tunnelStuck {
+                status = "tunnel disconnected — retry to relaunch"
+            } else {
+                status = "tunnel reconnecting — off-list browsing active"
+            }
         case .idle, .failed:
             break
         }
+    }
+
+    /// Track how long the tunnel link has been down while connected. Within the
+    /// grace window a drop reads as "reconnecting" (the core retries on its own);
+    /// past it the reconnect is presumed stuck and `tunnelStuck` flips the UI to
+    /// a disconnected state offering a manual Retry. Time spent suspended counts
+    /// on purpose: a link that died hours ago in the background should surface as
+    /// disconnected on resume, not spin as "reconnecting".
+    private func trackLinkOutage() {
+        guard phase == .connected, !tunnelConnected else {
+            linkDownSince = nil
+            tunnelStuck = false
+            return
+        }
+        let downSince = linkDownSince ?? Date()
+        linkDownSince = downSince
+        tunnelStuck = Date().timeIntervalSince(downSince) >= Self.reconnectGrace
     }
 
     private var connectedStatus: String {

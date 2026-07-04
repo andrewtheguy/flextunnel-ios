@@ -113,14 +113,19 @@ struct BrowserView: View {
     }
 
     private var tunnelStatusIcon: String {
-        proxy.socksPort != nil ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle"
+        if proxy.socksPort == nil { return "bolt.horizontal.circle" }
+        return proxy.tunnelStuck ? "bolt.slash.circle.fill" : "bolt.horizontal.circle.fill"
     }
 
     /// Green when the tunnel link is up, orange when browsing still works but the
-    /// tunnel is down (off-list only), red when the proxy is unusable.
+    /// tunnel is down (off-list only), red when the link is stuck disconnected or
+    /// the proxy is unusable.
     private var tunnelStatusColor: Color {
         if proxy.tunnelConnected {
             return .green
+        }
+        if proxy.tunnelStuck {
+            return .red
         }
         if proxyAvailable {
             return .orange
@@ -1055,21 +1060,32 @@ private struct TunnelStatusPopover: View {
 
                 // Tunnel status lives here in the popover so the page underneath
                 // is never disturbed. While the link is down the core reconnects on
-                // its own (off-list browsing keeps working); only a fully stopped
-                // proxy needs a manual Reconnect.
+                // its own (off-list browsing keeps working), but a Retry is always
+                // offered in case that reconnect is stuck — it relaunches the session.
                 if isReconnecting {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                            Text("Reconnecting…")
+                    VStack(alignment: .leading, spacing: 8) {
+                        if proxy.tunnelStuck {
+                            Text("The tunnel hasn't reconnected on its own. Retry relaunches the session.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
+                        } else {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                Text("Reconnecting…")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         if proxy.canBrowse {
                             Text("Off-list browsing works; on-list (tunneled) routes are temporarily unavailable.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        Button(action: onReconnect) {
+                            Label("Retry Connection", systemImage: "arrow.clockwise")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
                 } else if !proxy.socksAlive {
                     Button(action: onReconnect) {
@@ -1124,21 +1140,25 @@ private struct TunnelStatusPopover: View {
 
     private var tunnelLinkText: String {
         if proxy.tunnelConnected { return "connected" }
-        return proxy.socksAlive ? "reconnecting" : "down"
+        if !proxy.socksAlive { return "down" }
+        return proxy.tunnelStuck ? "disconnected" : "reconnecting"
     }
 
     private var healthTitle: String {
         if proxy.tunnelConnected { return "Tunnel connected" }
+        if proxy.tunnelStuck { return "Tunnel disconnected" }
         if proxy.canBrowse { return "Tunnel reconnecting" }
         return "Tunnel unavailable"
     }
 
     private var healthIcon: String {
-        proxy.tunnelConnected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle"
+        if proxy.tunnelConnected { return "bolt.horizontal.circle.fill" }
+        return proxy.tunnelStuck ? "bolt.slash.circle" : "bolt.horizontal.circle"
     }
 
     private var healthColor: Color {
         if proxy.tunnelConnected { return .green }
+        if proxy.tunnelStuck { return .red }
         if proxy.canBrowse { return .orange }
         return .red
     }

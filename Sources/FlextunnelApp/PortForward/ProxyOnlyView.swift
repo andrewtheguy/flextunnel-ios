@@ -18,7 +18,10 @@ struct ProxyOnlyView: View {
                 forwardsSection
 
                 Section {
-                    if !proxy.socksAlive {
+                    // Offered whenever the link is down, not just when the proxy
+                    // died: if the core's own reconnect is stuck this is the only
+                    // way out — it relaunches the session.
+                    if !proxy.socksAlive || !proxy.tunnelConnected {
                         Button {
                             proxy.retryNow()
                         } label: {
@@ -69,7 +72,7 @@ struct ProxyOnlyView: View {
                     .font(.headline)
                     .foregroundStyle(healthColor)
                 Spacer()
-                if proxy.socksAlive && !proxy.tunnelConnected {
+                if proxy.socksAlive && !proxy.tunnelConnected && !proxy.tunnelStuck {
                     ProgressView()
                 }
             }
@@ -96,7 +99,9 @@ struct ProxyOnlyView: View {
             }
 
             if proxy.socksAlive && !proxy.tunnelConnected {
-                Text("Direct forwards keep working; tunneled forwards are unavailable until the link recovers.")
+                Text(proxy.tunnelStuck
+                    ? "The tunnel hasn't reconnected on its own — Reconnect relaunches the session. Direct forwards keep working; tunneled forwards are unavailable."
+                    : "Direct forwards keep working; tunneled forwards are unavailable until the link recovers.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -166,21 +171,25 @@ struct ProxyOnlyView: View {
 
     private var tunnelLinkText: String {
         if proxy.tunnelConnected { return "connected" }
-        return proxy.socksAlive ? "reconnecting" : "down"
+        if !proxy.socksAlive { return "down" }
+        return proxy.tunnelStuck ? "disconnected" : "reconnecting"
     }
 
     private var healthTitle: String {
         if proxy.tunnelConnected { return "Tunnel connected" }
+        if proxy.tunnelStuck { return "Tunnel disconnected" }
         if proxy.socksAlive { return "Tunnel reconnecting" }
         return "Tunnel unavailable"
     }
 
     private var healthIcon: String {
-        proxy.tunnelConnected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle"
+        if proxy.tunnelConnected { return "bolt.horizontal.circle.fill" }
+        return proxy.tunnelStuck ? "bolt.slash.circle" : "bolt.horizontal.circle"
     }
 
     private var healthColor: Color {
         if proxy.tunnelConnected { return .green }
+        if proxy.tunnelStuck { return .red }
         if proxy.socksAlive { return .orange }
         return .red
     }
