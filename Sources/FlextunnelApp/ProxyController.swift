@@ -73,13 +73,34 @@ final class ProxyController: ObservableObject {
         /// the server resolves them; shown in the status popover like the
         /// server status page shows them.
         var hostAliases: [(alias: String, target: String)]
-        /// Reverse-routing (agent) alias names, informational only.
-        var agentAliases: [String]
+        /// Reverse-routing (agent) routes, informational only. Each carries a
+        /// live connection status the core refreshes over the heartbeat.
+        var agentRoutes: [AgentRoute]
 
         /// A `*` domain or a default-route CIDR means everything is tunneled, so a
         /// tunnel drop is a full outage (nothing is off-list to browse directly).
         var isFullTunnel: Bool {
             domains.contains("*") || cidrs.contains { $0 == "0.0.0.0/0" || $0 == "::/0" }
+        }
+    }
+
+    /// A reverse-routing (agent) alias plus the backing agent's live connection
+    /// status as the core reports it: `connected`, `disconnected`, or `unknown`
+    /// (the last when the tunnel is down or the heartbeat-fed view is stale).
+    struct AgentRoute: Identifiable {
+        var name: String
+        var status: Status
+
+        var id: String { name }
+
+        enum Status: String {
+            case connected, disconnected, unknown
+
+            /// Parse the FFI JSON token, defaulting to `.unknown` for anything
+            /// unrecognized (a missing/old field or a future value).
+            init(token: String?) {
+                self = token.flatMap(Status.init(rawValue:)) ?? .unknown
+            }
         }
     }
 
@@ -293,12 +314,20 @@ final class ProxyController: ObservableObject {
             .compactMap { pair -> (alias: String, target: String)? in
                 pair.count == 2 ? (alias: pair[0], target: pair[1]) : nil
             }
+        // agent_aliases is a JSON array of {"name","status"} objects.
+        let agentRoutes = (obj["agent_aliases"] as? [[String: Any]] ?? [])
+            .compactMap { entry -> AgentRoute? in
+                guard let name = entry["name"] as? String else { return nil }
+                return AgentRoute(
+                    name: name,
+                    status: .init(token: entry["status"] as? String))
+            }
         forwardedRoutes = ForwardedRoutes(
             connected: obj["connected"] as? Bool ?? false,
             domains: obj["domains"] as? [String] ?? [],
             cidrs: obj["cidrs"] as? [String] ?? [],
             hostAliases: hostAliases,
-            agentAliases: obj["agent_aliases"] as? [String] ?? [])
+            agentRoutes: agentRoutes)
     }
 
     deinit {
