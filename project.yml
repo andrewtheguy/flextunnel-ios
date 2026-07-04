@@ -35,10 +35,7 @@ packages:
   Flextunnel:
     path: Packages/Flextunnel
 
-# Ship one shared scheme that builds/runs the app (which embeds the widget
-# extension). The widget is Live-Activity-only: running its own scheme fails with
-# "Failed to get descriptors" because there's no home-screen widget to launch —
-# so we don't generate a scheme for it. Always run FlextunnelApp.
+# Ship one shared scheme that builds/runs the app.
 schemes:
   FlextunnelApp:
     build:
@@ -71,19 +68,12 @@ targets:
     platform: iOS
     sources:
       - Sources/FlextunnelApp
-      # Shared with the widget extension: the Live Activity attributes/state model
-      # must be compiled into both bundles.
-      - Sources/Shared
     dependencies:
       # Static-library XCFramework delivered via the sibling's Swift package
       # binary target (downloads the pinned release zip by URL+checksum). Xcode
       # links whichever slice matches the selected destination.
       - package: Flextunnel
         product: libflextunnel
-      # WidgetKit extension that renders the tunnel Live Activity (lock screen +
-      # Dynamic Island). Embedded into the app's PlugIns.
-      - target: FlextunnelWidgets
-        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.andrewtheguy.flextunnel
@@ -109,18 +99,3 @@ targets:
           - Security
           - -framework
           - SystemConfiguration
-
-  # WidgetKit extension: renders the tunnel Live Activity. No Rust/FFI, no
-  # Network Extension — it only draws the status the app pushes via ActivityKit.
-  FlextunnelWidgets:
-    type: app-extension
-    platform: iOS
-    sources:
-      - Sources/FlextunnelWidgets
-      - Sources/Shared
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.andrewtheguy.flextunnel.widgets
-        INFOPLIST_FILE: Sources/FlextunnelWidgets/Info.plist
-        MARKETING_VERSION: "0.0.1"
-        CURRENT_PROJECT_VERSION: "1"
