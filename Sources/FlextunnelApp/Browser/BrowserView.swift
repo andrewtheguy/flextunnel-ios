@@ -220,6 +220,11 @@ private struct BrowserHomeView: View {
         SearchEngine(title: "Bing", url: "https://www.bing.com/", color: Color(red: 0.0, green: 0.46, blue: 0.49)),
     ]
 
+    /// Always-on shortcut to the reserved `flextunnel.internal` server status
+    /// page, which flextunnel tunnels to the server regardless of the routed set,
+    /// so it's one tap away from a fresh tab.
+    private let internalShortcutURL = "http://flextunnel.internal"
+
     private let columns = [GridItem(.adaptive(minimum: 72, maximum: 96), spacing: 20)]
 
     var body: some View {
@@ -239,6 +244,24 @@ private struct BrowserHomeView: View {
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 320)
                 }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("SHORTCUTS")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    LazyVGrid(columns: columns, spacing: 20) {
+                        Button {
+                            onOpen(internalShortcutURL)
+                        } label: {
+                            internalShortcutTile
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!proxyAvailable)
+                    }
+                }
+                .frame(maxWidth: 420)
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text("SEARCH ENGINES")
@@ -266,6 +289,24 @@ private struct BrowserHomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
+    }
+
+    private var internalShortcutTile: some View {
+        VStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.tint)
+                .frame(width: 60, height: 60)
+                .overlay {
+                    Image(systemName: "bolt.horizontal.circle.fill")
+                        .font(.system(size: 30, weight: .regular))
+                        .foregroundStyle(.white)
+                }
+
+            Text("Server Status")
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        }
     }
 
     private func engineTile(_ engine: SearchEngine) -> some View {
