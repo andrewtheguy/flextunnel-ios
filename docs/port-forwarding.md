@@ -113,13 +113,16 @@ shortcut to Settings), behavior falls back to best-effort: extended execution
 keeps serving for roughly **30 seconds** after backgrounding, then iOS suspends
 the process:
 
-- suspended, not gone — the sockets survive, and listeners resume as soon as
-  you return to the app;
-- connections that were mid-transfer usually survive a brief suspension; longer
-  ones die and the client must reconnect;
-- the QUIC link often idles out while suspended; the core reconnects it on its
-  own once the app is foregrounded (this is invisible for off-list forwards and
-  a short stall for tunneled ones).
+- a suspension defuncts the process's sockets — the core's SOCKS listener and
+  QUIC endpoint as well as the forward listeners — and the core cannot recover
+  that on its own (its accept loop keeps failing while health still reads
+  alive, so everything *looks* connected while nothing answers);
+- so on return to the app, the session is **relaunched automatically**: the
+  same full stop/start as a manual disconnect/connect (fresh tunnel connect,
+  every enabled forward rebound), without tearing the screen down. Expect a
+  brief "connecting" while the handshake replays;
+- connections that were open when the suspension hit are dead; the client must
+  reconnect after you return.
 
 ## What forwards are (and aren't) good for
 
@@ -143,4 +146,4 @@ cannot — rewrite what flows through it:
 | client connects, then immediately drops | Target rejected through the tunnel (not in the server's routed set server-side), or unreachable. Check the badge and the server's `routed_domains`/`routed_cidrs`. |
 | tunneled forward stalls, direct ones fine | Tunnel link is reconnecting — see the status header. On-list targets need the link; off-list ones don't. |
 | web page shows a CDN error (e.g. 1003) | Host-header mismatch by design — see "What forwards are good for" above. |
-| forward dead after returning to the app | iOS suspended the process — usually because location permission is denied (see "Background behavior"), so only the ~30 s grace applied. The listener rebinds on return; reconnect the client, and allow location to keep sessions alive. |
+| forward dead after returning to the app | iOS suspended the process — usually because keep-alive is off or location permission is denied (see "Background behavior"), so only the ~30 s grace applied. The session relaunches automatically on return; give the handshake a moment, reconnect the client, and enable the keep-alive to hold sessions across backgrounding. |

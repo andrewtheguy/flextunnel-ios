@@ -80,6 +80,10 @@ struct ContentView: View {
     // so the SOCKS listener and port forwards outlive a brief app switch.
     @Environment(\.scenePhase) private var scenePhase
     @State private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    // Set when the background grace expired with nothing holding the process
+    // (see the expiration handler): iOS suspended the app and defunct'd the
+    // forward listeners, so the next foreground must rebind them.
+    @State private var wasSuspended = false
 
     // Owned here so bookmarks/history survive BrowserModel being recreated when
     // the proxy port changes.
@@ -346,23 +350,45 @@ struct ContentView: View {
     }
 
     /// Best-effort fallback: extended execution buys ~30s after backgrounding,
-    /// then iOS suspends the process (sockets survive; the core reconnects the
-    /// tunnel link on its own once resumed). Port-forwarding sessions get real
-    /// background persistence from the location session (`BackgroundKeepAlive`);
-    /// browser sessions have no reason to outlive a backgrounded WebView.
+    /// then iOS suspends the process and defuncts its sockets; the next
+    /// foreground relaunches the session (see `recoverFromSuspension`).
+    /// Port-forwarding sessions get real background persistence from the
+    /// location session (`BackgroundKeepAlive`); browser sessions have no
+    /// reason to outlive a backgrounded WebView.
     private func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .background:
             guard proxy.socksPort != nil, backgroundTask == .invalid else { break }
             backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "flextunnel-proxy") {
+                // Grace expired. Unless the location keep-alive is holding the
+                // process, iOS suspends it now and defuncts the forward
+                // listeners — remember that so the next foreground rebinds them.
+                wasSuspended = !keepAlive.isRunning
                 endBackgroundTask()
             }
         case .active:
             endBackgroundTask()
             proxy.noteForegrounded()
+            if wasSuspended {
+                wasSuspended = false
+                recoverFromSuspension()
+            }
         default:
             break
         }
+    }
+
+    /// iOS marks the process's sockets defunct while it is suspended, and the
+    /// core can't recover from that on its own: its SOCKS listener keeps
+    /// failing `accept()` (retried as transient, so health still reads alive
+    /// and the UI shows connected) and its QUIC endpoint can wedge the same
+    /// way. Relaunch the session — the same full stop/start a manual
+    /// disconnect/connect performs, minus the screen teardown — and rebind the
+    /// forward listeners, which were defunct'd with everything else.
+    private func recoverFromSuspension() {
+        guard proxy.phase == .connected else { return }
+        proxy.retryNow()
+        portForwards.rebindAfterSuspension()
     }
 
     private func endBackgroundTask() {

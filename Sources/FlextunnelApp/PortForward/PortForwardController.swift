@@ -57,6 +57,19 @@ final class PortForwardController: ObservableObject {
         }
     }
 
+    /// Called on return to foreground after the process was suspended (the
+    /// background grace expired without the location keep-alive holding it).
+    /// iOS defuncts the listeners' sockets during suspension, and a defunct
+    /// `NWListener` may never report failure — it can sit in a stale `.ready`
+    /// showing "listening" while clients can't connect — so every enabled
+    /// forward is rebound rather than trusting the reported state. Open relays
+    /// are dropped with it; connections that spanned a suspension are dead
+    /// anyway.
+    func rebindAfterSuspension() {
+        guard socksPort != nil else { return } // proxy died; syncProxy owns teardown
+        forwards.filter(\.enabled).forEach(startForwarder)
+    }
+
     // MARK: - CRUD (persist + live-apply)
 
     func add(_ forward: PortForward) {
