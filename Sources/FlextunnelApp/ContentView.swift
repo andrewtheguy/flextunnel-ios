@@ -321,7 +321,10 @@ struct ContentView: View {
     /// when it's alive, stop when it goes away, rebind on a port change. Runs in
     /// both modes — the forwards are useful while browsing too.
     private func syncForwards() {
-        portForwards.syncProxy(socksAlive: proxy.socksAlive, socksPort: proxy.socksPort)
+        portForwards.syncProxy(
+            socksAlive: proxy.socksAlive,
+            socksPort: proxy.socksPort,
+            serverNodeID: proxy.connectionSummary?.serverNodeID)
     }
 
     // MARK: - Background keep-alive

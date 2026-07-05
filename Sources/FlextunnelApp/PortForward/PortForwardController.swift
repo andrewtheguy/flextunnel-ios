@@ -19,8 +19,17 @@ final class PortForwardController: ObservableObject {
     @Published private(set) var runtime: [UUID: RuntimeStatus] = [:]
 
     private var forwarders: [UUID: PortForwarder] = [:]
+    /// Forwards whose current forwarder reached `.listening` at least once.
+    /// Distinguishes an *initial setup* failure (never listened — e.g. the
+    /// local port is in use), which auto-stops the forward and flips its
+    /// toggle back off, from a later failure (listeners dying around app
+    /// suspension), which keeps it enabled so it resumes with the session.
+    private var everListened: Set<UUID> = []
     /// The SOCKS port forwards currently relay through; nil while the proxy is down.
     private var socksPort: UInt16?
+    /// One wrong-instance probe per proxy session, shared by all forwarders
+    /// (see `InstanceProbe`); recreated whenever the session changes.
+    private var probe: InstanceProbe?
     private let fileURL: URL
 
     init(directory: URL? = nil) {
@@ -33,14 +42,18 @@ final class PortForwardController: ObservableObject {
     // MARK: - Proxy lifecycle
 
     /// Reconciles the running forwarders with the proxy state. Any effective
-    /// port change (up, down, or rebind) restarts everything on the new port.
-    func syncProxy(socksAlive: Bool, socksPort: UInt16?) {
+    /// port change (up, down, or rebind) restarts everything on the new port,
+    /// with a fresh wrong-instance probe for the new session.
+    func syncProxy(socksAlive: Bool, socksPort: UInt16?, serverNodeID: String?) {
         let newPort = socksAlive ? socksPort : nil
         guard newPort != self.socksPort else { return }
         self.socksPort = newPort
         stopAllForwarders()
-        if newPort != nil {
+        if let newPort, let serverNodeID {
+            probe = InstanceProbe(socksPort: newPort, expectedNodeID: serverNodeID)
             forwards.filter(\.enabled).forEach(startForwarder)
+        } else {
+            probe = nil
         }
     }
 
@@ -83,21 +96,44 @@ final class PortForwardController: ObservableObject {
     // MARK: - Forwarders
 
     private func startForwarder(_ forward: PortForward) {
-        guard let socksPort else { return }
+        guard let socksPort, let probe else { return }
         stopForwarder(id: forward.id)
-        let forwarder = PortForwarder(forward: forward, socksPort: socksPort)
+        let forwarder = PortForwarder(forward: forward, socksPort: socksPort, probe: probe)
         let id = forward.id
+        everListened.remove(id) // a fresh attempt must prove itself again
         forwarder.onStatus = { [weak self] state, count in
             Task { @MainActor in
-                self?.runtime[id] = RuntimeStatus(state: state, connectionCount: count)
+                self?.handleStatus(id: id, state: state, count: count)
             }
         }
         forwarders[id] = forwarder
         forwarder.start()
     }
 
+    /// Runtime-status sink for the live forwarders. The toggle is start/stop:
+    /// a failure before the forward ever listened means its initial setup
+    /// failed, so the forward is stopped and its toggle flipped back off, with
+    /// the reason left on the row (until the next start attempt resets it).
+    private func handleStatus(id: UUID, state: PortForwardState, count: Int) {
+        guard forwarders[id] != nil else { return } // stale callback after a stop
+        if case .listening = state {
+            everListened.insert(id)
+        }
+        if case .failed = state, !everListened.contains(id) {
+            forwarders.removeValue(forKey: id)?.cancel()
+            if let index = forwards.firstIndex(where: { $0.id == id }) {
+                forwards[index].enabled = false
+                persist()
+            }
+            runtime[id] = RuntimeStatus(state: state, connectionCount: 0)
+            return
+        }
+        runtime[id] = RuntimeStatus(state: state, connectionCount: count)
+    }
+
     private func stopForwarder(id: UUID) {
         forwarders.removeValue(forKey: id)?.cancel()
+        everListened.remove(id)
         runtime[id] = RuntimeStatus()
     }
 

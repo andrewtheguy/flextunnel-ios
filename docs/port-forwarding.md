@@ -38,6 +38,14 @@ Each row shows a **tunneled** (green) or **direct** (orange) badge predicting
 that decision from the pushed tunnel set. The badge is advisory — the core (and
 the server's own whitelist) remain the authority per connection.
 
+Before a session's first connection is relayed, the forwarders probe the SOCKS
+port by fetching `http://flextunnel.internal/status.json` through it and
+requiring the reported `server_node_id` to match the configured server (the
+same guard as the desktop forwarder). A wrong answer means some other SOCKS5
+server is on the port, and the connection is dropped instead of sending traffic
+to the wrong place — a misconfiguration guard, not security. Success is cached
+for the session; failures retry on the next connection.
+
 ### Managing forwards
 
 Tap **+** to add; tap a row to edit. Fields: optional label, local port, remote
@@ -46,12 +54,18 @@ on the server for tunneled targets), remote port. The sheet rejects a local
 port that is out of range, already used by another forward, or equal to the
 SOCKS port; ports below 1024 are warned about (iOS apps can't bind them).
 
-Each row has an **enabled toggle**:
+Each row has a **start/stop toggle**:
 
 - **on** — the listener binds whenever the SOCKS proxy is up, and rebinds
   automatically across reconnects and port changes;
 - **off** — the listener closes immediately (open connections drop, the local
-  port is released) and stays out of auto-start until re-enabled.
+  port is released) and stays out of auto-start until started again.
+
+If starting fails during initial setup (e.g. the local port is in use), the
+forward stops and the toggle flips back off, with the reason left on the row
+until the next start attempt. A failure *after* the forward was listening
+(e.g. iOS reclaiming the listeners around suspension) does not flip it off —
+the forward stays enabled and resumes with the session.
 
 The status line under each enabled forward is live: `listening`,
 `listening · N active` (open connection count), or a red reason such as

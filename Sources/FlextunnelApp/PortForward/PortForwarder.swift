@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 
 /// Runtime state of one forward's listener.
 enum PortForwardState: Equatable {
@@ -33,16 +34,21 @@ final class PortForwarder {
 
     private let forward: PortForward
     private let socksPort: UInt16
+    /// Session-shared wrong-instance guard; every accepted connection awaits it
+    /// (instant after the session's first success).
+    private let probe: InstanceProbe
     private let queue: DispatchQueue
+    private let log = Logger(subsystem: "com.example.flextunnel", category: "portforward")
     /// Keyed by loopback host ("127.0.0.1" / "::1").
     private var listeners: [String: NWListener] = [:]
     private var listenerStates: [String: ListenerState] = [:]
     private var relays: [Relay] = []
     private var state: PortForwardState = .stopped
 
-    init(forward: PortForward, socksPort: UInt16) {
+    init(forward: PortForward, socksPort: UInt16, probe: InstanceProbe) {
         self.forward = forward
         self.socksPort = socksPort
+        self.probe = probe
         self.queue = DispatchQueue(label: "portforward.\(forward.localPort)")
     }
 
@@ -137,7 +143,27 @@ final class PortForwarder {
         }
     }
 
+    /// Relaying starts only once the wrong-instance probe has succeeded this
+    /// session (the kernel buffers the client meanwhile); on failure the
+    /// connection is dropped so the client sees a fast close, never bytes
+    /// flowing to the wrong place.
     private func accept(_ inbound: NWConnection) {
+        probe.verify(on: queue) { [weak self] result in
+            guard let self else {
+                inbound.cancel()
+                return
+            }
+            switch result {
+            case .success:
+                self.startRelay(inbound)
+            case .failure(let error):
+                self.log.error("forward localhost:\(self.forward.localPort): \(error.localizedDescription)")
+                inbound.cancel()
+            }
+        }
+    }
+
+    private func startRelay(_ inbound: NWConnection) {
         let relay = Relay(inbound: inbound, outbound: makeOutbound())
         relay.onClose = { [weak self, weak relay] in
             guard let self, let relay else { return }
