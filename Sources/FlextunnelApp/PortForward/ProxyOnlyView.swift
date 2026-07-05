@@ -1,12 +1,16 @@
 import SwiftUI
+import UIKit
 
 /// Full-screen proxy-only session: tunnel status, the bound SOCKS endpoint, and
 /// the managed port forwards — no browser. Other apps on the device reach the
 /// forwards (and the SOCKS proxy itself) at 127.0.0.1 while this app is alive;
-/// backgrounding keeps them up only best-effort (~30s) before iOS suspends us.
+/// the location keep-alive (see `BackgroundKeepAlive`) holds the session in the
+/// background, falling back to best-effort (~30s before suspension) when
+/// location permission is denied.
 struct ProxyOnlyView: View {
     @ObservedObject var proxy: ProxyController
     @ObservedObject var store: PortForwardController
+    @ObservedObject var keepAlive: BackgroundKeepAlive
     let onStop: () -> Void
 
     @State private var editingDraft: ForwardDraft?
@@ -16,6 +20,7 @@ struct ProxyOnlyView: View {
             List {
                 statusSection
                 forwardsSection
+                backgroundSection
 
                 Section {
                     // Offered whenever the link is down, not just when the proxy
@@ -165,7 +170,42 @@ struct ProxyOnlyView: View {
         } header: {
             Text("Port forwards")
         } footer: {
-            Text("Forwards listen on localhost (127.0.0.1 and ::1) and are reachable from other apps on this device while flextunnel is running. iOS suspends the app shortly after backgrounding; forwards resume when you return.")
+            Text("Forwards listen on localhost (127.0.0.1 and ::1) and are reachable from other apps on this device while flextunnel is running.")
+        }
+    }
+
+    // MARK: - Background keep-alive
+
+    /// The keep-alive setting, its live status, and — when location permission
+    /// is missing — the path to fix it.
+    private var backgroundSection: some View {
+        Section {
+            Toggle("Keep alive in background", isOn: $keepAlive.enabled)
+            if keepAlive.enabled {
+                if keepAlive.denied {
+                    Text("Location access is denied, so iOS suspends the app about 30 seconds after backgrounding and forwards stop until you return.")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                    Button {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    } label: {
+                        Label("Allow location in Settings", systemImage: "location.slash")
+                    }
+                } else {
+                    InfoRow(
+                        "Background keep-alive",
+                        keepAlive.isRunning ? "active" : "starts with the session",
+                        valueColor: keepAlive.isRunning ? .green : nil)
+                }
+            }
+        } header: {
+            Text("Background")
+        } footer: {
+            Text(keepAlive.enabled
+                ? "A coarse location session (fixes are discarded, nothing is stored or sent) keeps iOS from suspending the app, so forwards stay reachable while you use other apps. It stops when you stop the proxy. Expect the location indicator and some extra battery use."
+                : "iOS suspends the app about 30 seconds after backgrounding; forwards stop until you return.")
         }
     }
 

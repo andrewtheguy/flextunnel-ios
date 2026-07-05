@@ -76,12 +76,42 @@ at-rest protections as bookmarks/history) and **auto-start** whenever the proxy
 comes up — including when the proxy was started in browser mode; the management
 UI just lives in proxy-only mode.
 
-## Background behavior (best-effort)
+## Background behavior (location keep-alive)
 
 There is no VPN / Network Extension, so the listeners live inside the app
-process and follow its lifecycle. When you switch away, the app requests
-extended execution and keeps serving for roughly **30 seconds**; after that iOS
-suspends the process:
+process and follow its lifecycle. To keep them alive in the background, the app
+uses the same technique as Termius and Blink: while a proxy-only session is up,
+it runs a **continuous Core Location session**, and iOS does not suspend an app
+that is actively receiving location updates — so the SOCKS listener and every
+forward stay reachable indefinitely while you use other apps.
+
+The **"Keep alive in background"** toggle in the proxy screen's Background
+section controls this; it is **on by default** and the choice persists across
+launches. Switched off, the app falls back to the best-effort ~30 s grace
+described below.
+
+How it's implemented (`BackgroundKeepAlive.swift`):
+
+- the first port-forwarding session prompts for **When In Use** location
+  permission; granting it is all the setup there is;
+- accuracy is deliberately coarse (100 km, like Blink's `geo track`) so fixes
+  come from cell towers rather than the GPS radio — the battery cost is small;
+- every fix is **discarded**: nothing is stored or sent anywhere; the location
+  session exists purely so iOS keeps the process running;
+- it starts and stops with the proxy-only session, so the system's location
+  indicator never shows while the proxy is down;
+- expect the location-in-use indicator while a session runs — that's iOS
+  truthfully reporting the active location session.
+
+This is fine for a personally-distributed build, but it is **not App Store
+material**: review requires location be used for user-visible location
+features, not as a keep-alive vehicle (Termius/Blink dress theirs up with
+geo-tagging and geo-fencing features for this reason).
+
+If location permission is **denied** (the proxy-only screen shows this, with a
+shortcut to Settings), behavior falls back to best-effort: extended execution
+keeps serving for roughly **30 seconds** after backgrounding, then iOS suspends
+the process:
 
 - suspended, not gone — the sockets survive, and listeners resume as soon as
   you return to the app;
@@ -90,9 +120,6 @@ suspends the process:
 - the QUIC link often idles out while suspended; the core reconnects it on its
   own once the app is foregrounded (this is invisible for off-list forwards and
   a short stall for tunneled ones).
-
-Practically: bring flextunnel to the foreground, switch to the client app, and
-do your work in bouts; re-open flextunnel whenever the forward has gone stale.
 
 ## What forwards are (and aren't) good for
 
@@ -116,4 +143,4 @@ cannot — rewrite what flows through it:
 | client connects, then immediately drops | Target rejected through the tunnel (not in the server's routed set server-side), or unreachable. Check the badge and the server's `routed_domains`/`routed_cidrs`. |
 | tunneled forward stalls, direct ones fine | Tunnel link is reconnecting — see the status header. On-list targets need the link; off-list ones don't. |
 | web page shows a CDN error (e.g. 1003) | Host-header mismatch by design — see "What forwards are good for" above. |
-| forward dead after returning to the app | iOS suspended the process past the ~30 s grace. The listener rebinds on return; reconnect the client. |
+| forward dead after returning to the app | iOS suspended the process — usually because location permission is denied (see "Background behavior"), so only the ~30 s grace applied. The listener rebinds on return; reconnect the client, and allow location to keep sessions alive. |

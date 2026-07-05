@@ -25,6 +25,16 @@
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<true/>
 	</dict>
+	<!-- Background keep-alive for port forwarding (see BackgroundKeepAlive.swift):
+	     a coarse continuous location session stops iOS from suspending the app so
+	     forwards stay reachable in the background — same technique as Termius and
+	     Blink. Location fixes are discarded; not App Store material as-is. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Location keeps the proxy and port forwards running while flextunnel is in the background. Your location is discarded — never stored or sent anywhere.</string>
 	<!-- POC only: allow cleartext http:// so plain-HTTP targets (e.g. the
 	     server.ezvpn:8000 alias) can be tested. The traffic is still tunneled
 	     over QUIC/TLS to the server; this only relaxes the *app's* ATS policy

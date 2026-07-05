@@ -52,6 +52,9 @@ struct ContentView: View {
 
     @StateObject private var proxy = ProxyController()
     @StateObject private var portForwards = PortForwardController()
+    // Location-based background keep-alive, active while a proxy-only session
+    // runs (see BackgroundKeepAlive.swift and docs/background-keep-alive.md).
+    @StateObject private var keepAlive = BackgroundKeepAlive()
 
     @AppStorage("lastServerNodeID") private var serverNodeID = ""
     @State private var authToken = ""
@@ -175,6 +178,7 @@ struct ContentView: View {
                 ProxyOnlyView(
                     proxy: proxy,
                     store: portForwards,
+                    keepAlive: keepAlive,
                     onStop: {
                         proxy.stop()
                         // Explicitly drop the cover: the binding's setter only
@@ -197,6 +201,10 @@ struct ContentView: View {
             .onChange(of: proxy.socksPort) {
                 syncSessionPresentation()
                 syncForwards()
+                syncKeepAlive()
+            }
+            .onChange(of: proxyOnlyActive) {
+                syncKeepAlive()
             }
             .onChange(of: proxy.socksAlive) {
                 syncForwards()
@@ -208,6 +216,7 @@ struct ContentView: View {
                 loadStoredToken()
                 syncSessionPresentation()
                 syncForwards()
+                syncKeepAlive()
             }
         }
     }
@@ -329,10 +338,18 @@ struct ContentView: View {
 
     // MARK: - Background keep-alive
 
-    /// Best-effort only: extended execution buys ~30s after backgrounding, then
-    /// iOS suspends the process (sockets survive; the core reconnects the tunnel
-    /// link on its own once resumed). No Network Extension, so nothing stronger
-    /// is available.
+    /// The location keep-alive follows the port-forwarding session: it runs
+    /// whenever the proxy-only screen is up with a live SOCKS listener, and
+    /// stops with it (so the location indicator never outlives the proxy).
+    private func syncKeepAlive() {
+        keepAlive.setSessionActive(proxyOnlyActive && proxy.socksPort != nil)
+    }
+
+    /// Best-effort fallback: extended execution buys ~30s after backgrounding,
+    /// then iOS suspends the process (sockets survive; the core reconnects the
+    /// tunnel link on its own once resumed). Port-forwarding sessions get real
+    /// background persistence from the location session (`BackgroundKeepAlive`);
+    /// browser sessions have no reason to outlive a backgrounded WebView.
     private func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .background:
