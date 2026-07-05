@@ -13,7 +13,16 @@ struct PortForward: Identifiable, Codable, Equatable {
     /// SOCKS proxy unresolved and DNS happens on the flextunnel server.
     var remoteHost: String
     var remotePort: UInt16
-    var enabled: Bool
+    /// Runtime-only by design: the start/stop toggle is per-session, so it is
+    /// excluded from persistence (see `CodingKeys`) and every launch loads the
+    /// forward switched off.
+    var enabled: Bool = false
+
+    /// Everything but `enabled` — what a forward *is* persists; whether it is
+    /// running does not.
+    private enum CodingKeys: String, CodingKey {
+        case id, label, localPort, remoteHost, remotePort
+    }
 
     init(
         id: UUID = UUID(),

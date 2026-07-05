@@ -54,12 +54,14 @@ on the server for tunneled targets), remote port. The sheet rejects a local
 port that is out of range, already used by another forward, or equal to the
 SOCKS port; ports below 1024 are warned about (iOS apps can't bind them).
 
-Each row has a **start/stop toggle**:
+Each row has a **start/stop toggle**, and the toggle is **per-session**: a
+fresh session start (either CTA on the setup screen) begins with every forward
+off — nothing tunnels until you switch it on:
 
-- **on** — the listener binds whenever the SOCKS proxy is up, and rebinds
-  automatically across reconnects and port changes;
+- **on** — the listener binds while the SOCKS proxy is up, and rebinds
+  automatically across mid-session reconnects and port changes;
 - **off** — the listener closes immediately (open connections drop, the local
-  port is released) and stays out of auto-start until started again.
+  port is released).
 
 If starting fails during initial setup (e.g. the local port is in use), the
 forward stops and the toggle flips back off, with the reason left on the row
@@ -71,10 +73,11 @@ The status line under each enabled forward is live: `listening`,
 `listening · N active` (open connection count), or a red reason such as
 `port 8080 is in use`.
 
-Forwards persist across launches (as JSON in the app container, with the same
-at-rest protections as bookmarks/history) and **auto-start** whenever the proxy
-comes up — including when the proxy was started in browser mode; the management
-UI just lives in proxy-only mode.
+Forward definitions persist across launches (as JSON in the app container,
+with the same at-rest protections as bookmarks/history); the toggle state is
+deliberately **not** part of that — it is runtime-only, so forwards never
+auto-start with a session. Once switched on they work in browser-mode sessions
+too; the management UI just lives in proxy-only mode.
 
 ## Background behavior (location keep-alive)
 

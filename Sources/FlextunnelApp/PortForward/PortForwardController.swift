@@ -6,8 +6,13 @@ import Combine
 /// `BrowserLibrary`: Data Protection until first unlock, excluded from backups —
 /// targets are internal hostnames, the same sensitivity class as history).
 ///
-/// Enabled forwards auto-start whenever the SOCKS5 listener is up and stop when
-/// it goes away; `ContentView` feeds proxy state in via `syncProxy`.
+/// Forward definitions persist; the enabled state is per-session by design —
+/// it is never persisted (see `PortForward.CodingKeys`), so launches load
+/// everything off, and a fresh session start in the same run disables
+/// everything again (`disableAll`). A toggle turned on then lives with the
+/// SOCKS5 listener (running while it's up, restarted across mid-session
+/// reconnects and port changes, stopped when it goes away); `ContentView`
+/// feeds proxy state in via `syncProxy`.
 @MainActor
 final class PortForwardController: ObservableObject {
     struct RuntimeStatus: Equatable {
@@ -104,6 +109,15 @@ final class PortForwardController: ObservableObject {
     /// Whether another forward already claims this local port (edit validation).
     func isLocalPortTaken(_ port: UInt16, excluding id: UUID?) -> Bool {
         forwards.contains { $0.localPort == port && $0.id != id }
+    }
+
+    /// Flip every forward off (stopping any that run). A fresh session start
+    /// goes through this so forwards never auto-start with the session — the
+    /// toggles are per-session opt-in; only a mid-session reconnect keeps them.
+    func disableAll() {
+        for forward in forwards where forward.enabled {
+            setEnabled(false, id: forward.id)
+        }
     }
 
     // MARK: - Forwarders

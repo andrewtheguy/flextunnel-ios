@@ -249,6 +249,11 @@ struct ContentView: View {
 
     private func startProxy(mode: SessionMode) {
         sessionMode = mode
+        // A fresh session starts with every forward off: the CTA never
+        // auto-starts tunnels, the user enables what this session needs.
+        // (Mid-session reconnects don't come through here, so they keep the
+        // toggles as set.)
+        portForwards.disableAll()
         let settings = currentSettings()
         connectingSettings = settings
         proxy.start(settings)
