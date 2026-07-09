@@ -96,14 +96,16 @@ final class ProxyController: ObservableObject {
     /// on-demand "connection path" readout. Mirrors the desktop's `ConnPath` and
     /// `ezvpn client status`; produced by `queryConnPath()`.
     struct ConnPath: Identifiable {
+        /// Stable synthetic identity = the path's index in the snapshot. `display`
+        /// can't be the id: it embeds the RTT, so it churns every refresh for the
+        /// same path (breaking `ForEach` row identity) and two paths could collide.
+        let id: Int
         var kind: Kind
         /// Human line like `Direct 1.2.3.4:52186 (rtt 1ms)` or
         /// `Relay https://… (rtt 42ms)`.
         var display: String
         /// Whether iroh currently routes traffic over this path.
         var selected: Bool
-
-        var id: String { display }
 
         enum Kind: String {
             case direct, relay, other
@@ -401,9 +403,10 @@ final class ProxyController: ObservableObject {
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let paths = obj["paths"] as? [[String: Any]]
         else { return [] }
-        return paths.compactMap { entry in
+        return paths.enumerated().compactMap { index, entry in
             guard let display = entry["display"] as? String else { return nil }
             return ConnPath(
+                id: index,
                 kind: .init(token: entry["kind"] as? String),
                 display: display,
                 selected: entry["selected"] as? Bool ?? false)
