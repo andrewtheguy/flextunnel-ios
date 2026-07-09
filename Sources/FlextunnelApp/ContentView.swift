@@ -231,6 +231,9 @@ struct ContentView: View {
                 syncLiveActivity()
             }
             .onChange(of: proxy.tunnelConnected) { syncLiveActivity() }
+            // `tunnelStuck` flips without `tunnelConnected`/`socksAlive` changing,
+            // so it needs its own trigger to refresh the banner (→ "Disconnected").
+            .onChange(of: proxy.tunnelStuck) { syncLiveActivity() }
             .onChange(of: scenePhase) { _, phase in
                 handleScenePhase(phase)
             }
@@ -241,7 +244,9 @@ struct ContentView: View {
                 syncKeepAlive()
                 // Let the poll loop refresh the Live Activity while backgrounded
                 // under keep-alive (SwiftUI's .onChange above is paused then).
-                proxy.onBackgroundLiveActivityRefresh = { syncLiveActivity() }
+                // Background refreshes must not create an activity — Activity.request
+                // is foreground-only — so they only update/end an existing one.
+                proxy.onBackgroundLiveActivityRefresh = { syncLiveActivity(allowCreate: false) }
                 // Reconcile any Live Activity the controller reattached to on
                 // launch with the real state (ends a leftover banner while idle).
                 syncLiveActivity()
@@ -405,11 +410,18 @@ struct ContentView: View {
                 wasSuspended = !keepAlive.isRunning
                 if wasSuspended {
                     // Suspended: the banner can no longer be kept fresh, so dismiss
-                    // it now (≈ the grace after backgrounding). A foreground before
-                    // this handler fires cancels the task, so the banner stays live.
-                    liveActivity.end()
+                    // it now (≈ the grace after backgrounding). Hold the task
+                    // assertion until the async dismissal actually registers, then
+                    // end it — otherwise the app can suspend first and leave the
+                    // banner behind. A foreground before this handler fires cancels
+                    // the task, so the banner stays live.
+                    Task {
+                        await liveActivity.endNow()
+                        endBackgroundTask()
+                    }
+                } else {
+                    endBackgroundTask()
                 }
-                endBackgroundTask()
             }
         case .active:
             endBackgroundTask()
@@ -449,9 +461,10 @@ struct ContentView: View {
     // MARK: - Live Activity
 
     /// Mirror the session into the Live Activity: start/refresh it while connected,
-    /// end it once the session is gone. Idempotent — `start` updates an existing
-    /// activity — so it's safe to call from every relevant state change.
-    private func syncLiveActivity() {
+    /// reflect a reconnect while connecting, and end it once the session is gone.
+    /// `allowCreate` is false for background refreshes, which must never call
+    /// `Activity.request` (foreground-only) — they only update/end an existing one.
+    private func syncLiveActivity(allowCreate: Bool = true) {
         switch proxy.phase {
         case .connected:
             let state = TunnelActivityAttributes.ContentState(
@@ -459,15 +472,27 @@ struct ContentView: View {
                 socksAlive: proxy.socksAlive,
                 statusText: liveActivityStatusText
             )
-            liveActivity.start(
-                serverLabel: liveActivityServerLabel,
-                modeTitle: sessionMode.title,
-                state: state
-            )
+            if allowCreate {
+                liveActivity.start(
+                    serverLabel: liveActivityServerLabel,
+                    modeTitle: sessionMode.title,
+                    state: state
+                )
+            } else {
+                liveActivity.update(state)
+            }
+        case .connecting:
+            // A reconnect (retryNow) passes through .connecting with a live banner —
+            // reflect it as reconnecting rather than leaving the stale "Connected".
+            // update() is a no-op when there's no banner (initial connect), so it
+            // never creates one here.
+            liveActivity.update(TunnelActivityAttributes.ContentState(
+                tunnelConnected: false,
+                socksAlive: proxy.socksAlive,
+                statusText: "Reconnecting…"
+            ))
         case .idle, .failed:
             liveActivity.end()
-        case .connecting:
-            break
         }
     }
 
@@ -478,6 +503,9 @@ struct ContentView: View {
 
     private var liveActivityStatusText: String {
         if proxy.tunnelConnected { return "Connected" }
+        // Stuck: the core's own reconnect is presumed wedged (manual retry needed),
+        // so it reads disconnected rather than optimistically "Reconnecting…".
+        if proxy.tunnelStuck { return "Disconnected" }
         if proxy.socksAlive { return "Reconnecting…" }
         return "Disconnected"
     }

@@ -77,6 +77,16 @@ final class LiveActivityController {
         Task { await activity.end(nil, dismissalPolicy: .immediate) }
     }
 
+    /// Await variant of `end()` for the background-task expiration handler: the
+    /// caller must hold the task assertion until the dismissal actually registers,
+    /// otherwise the app can suspend before the async end lands and the banner is
+    /// left behind.
+    func endNow() async {
+        guard let activity else { return }
+        self.activity = nil
+        await activity.end(nil, dismissalPolicy: .immediate)
+    }
+
     private func content(
         _ state: TunnelActivityAttributes.ContentState
     ) -> ActivityContent<TunnelActivityAttributes.ContentState> {
