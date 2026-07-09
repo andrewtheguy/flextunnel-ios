@@ -28,16 +28,16 @@ final class LiveActivityController {
     /// How long a pushed state stays trustworthy. Past this the widget flips to a
     /// "status unknown — open app" look (via `context.isStale`) instead of showing
     /// a confidently-stale value. This matters while the app keeps running but
-    /// stops updating (e.g. a location-keep-alive session in the background);
-    /// once the app is suspended the banner is instead scheduled to be dismissed
-    /// (see `expire(after:)`).
+    /// stops updating (e.g. a location-keep-alive session in the background); when
+    /// the app is actually suspended the banner is instead dismissed outright
+    /// (`ContentView`'s background-task expiration handler calls `end()`).
     private static let staleAfter: TimeInterval = 90
 
     /// Start the activity, or update it if one is already live (so callers can
-    /// treat this as idempotent "reflect the connected state"). If the previous
-    /// activity was scheduled to expire on backgrounding (now `.ended`) or was
-    /// dismissed, drop it and request a fresh one — this revives the banner when
-    /// the user foregrounds a still-connected session.
+    /// treat this as idempotent "reflect the connected state"). If a previous
+    /// activity is `.ended`/`.dismissed` (e.g. a survivor reattached on launch),
+    /// drop it and request a fresh one so the banner reappears for a still-
+    /// connected session.
     func start(serverLabel: String, modeTitle: String, state: TunnelActivityAttributes.ContentState) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         if let current = activity {
@@ -46,8 +46,8 @@ final class LiveActivityController {
                 update(state)
                 return
             case .ended, .dismissed:
-                // Scheduled to expire, or already gone. Pull it now so it can't
-                // linger alongside the fresh one, then fall through to request.
+                // Already gone/ending (e.g. a survivor reattached on launch). Pull
+                // it now so it can't linger alongside the fresh one, then request.
                 Task { await current.end(nil, dismissalPolicy: .immediate) }
                 activity = nil
             @unknown default:
@@ -69,19 +69,6 @@ final class LiveActivityController {
     func update(_ state: TunnelActivityAttributes.ContentState) {
         guard let activity else { return }
         Task { await activity.update(content(state)) }
-    }
-
-    /// Schedule the banner to disappear about `interval` from now, matching when
-    /// iOS suspends the backgrounded app (its sockets defunct, so the last state
-    /// stops being meaningful). A scheduled `.after` dismissal is honored by the
-    /// system even while the process is suspended, so no post-suspension code is
-    /// needed. The `activity` reference is kept so `start()` can revive it if the
-    /// app returns to the foreground before the dismissal lands.
-    func expire(after interval: TimeInterval) {
-        guard let activity,
-              activity.activityState == .active || activity.activityState == .stale
-        else { return }
-        Task { await activity.end(nil, dismissalPolicy: .after(Date().addingTimeInterval(interval))) }
     }
 
     func end() {

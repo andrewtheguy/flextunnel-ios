@@ -91,11 +91,6 @@ struct ContentView: View {
     // Tunnel status Live Activity (lock screen / Dynamic Island). UX only — it
     // reflects the last-known state; it neither grants nor needs background time.
     @State private var liveActivity = LiveActivityController()
-    // Approximates iOS's `beginBackgroundTask` grace: when the app is backgrounded
-    // without the location keep-alive holding it, the process is suspended about
-    // this long after, so the Live Activity is scheduled to disappear then (the
-    // same ~30s cited in ProxyOnlyView's background note).
-    private static let liveActivityBackgroundGrace: TimeInterval = 30
 
     // Owned here so bookmarks/history survive BrowserModel being recreated when
     // the proxy port changes.
@@ -244,6 +239,9 @@ struct ContentView: View {
                 syncSessionPresentation()
                 syncForwards()
                 syncKeepAlive()
+                // Let the poll loop refresh the Live Activity while backgrounded
+                // under keep-alive (SwiftUI's .onChange above is paused then).
+                proxy.onBackgroundLiveActivityRefresh = { syncLiveActivity() }
                 // Reconcile any Live Activity the controller reattached to on
                 // launch with the real state (ends a leftover banner while idle).
                 syncLiveActivity()
@@ -392,22 +390,30 @@ struct ContentView: View {
     private func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .background:
-            // Expire the Live Activity around when iOS suspends us; if the
-            // location keep-alive is holding the process, the app keeps running
-            // (and updating the banner), so leave it live.
-            if !keepAlive.isRunning {
-                liveActivity.expire(after: Self.liveActivityBackgroundGrace)
-            }
+            // While the location keep-alive holds the process, the poll loop keeps
+            // running: let it refresh the Live Activity in the background (SwiftUI's
+            // .onChange handlers are paused now). Otherwise the banner is left live
+            // and only dismissed at actual suspension (the expiration handler
+            // below), so it lingers the full grace and a return to the foreground
+            // within it keeps it live — no premature .end()/revive flicker.
+            proxy.backgroundLiveActivityRefreshEnabled = keepAlive.isRunning
             guard proxy.socksPort != nil, backgroundTask == .invalid else { break }
             backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "flextunnel-proxy") {
-                // Grace expired. Unless the location keep-alive is holding the
-                // process, iOS suspends it now and defuncts the forward
-                // listeners — remember that so the next foreground rebinds them.
+                // Grace expired → iOS suspends us now (unless keep-alive holds the
+                // process) and defuncts the forward listeners — remember that so the
+                // next foreground rebinds them.
                 wasSuspended = !keepAlive.isRunning
+                if wasSuspended {
+                    // Suspended: the banner can no longer be kept fresh, so dismiss
+                    // it now (≈ the grace after backgrounding). A foreground before
+                    // this handler fires cancels the task, so the banner stays live.
+                    liveActivity.end()
+                }
                 endBackgroundTask()
             }
         case .active:
             endBackgroundTask()
+            proxy.backgroundLiveActivityRefreshEnabled = false
             proxy.noteForegrounded()
             // Revive an expired banner (via start()) so a still-connected session
             // is glanceable again on return.
