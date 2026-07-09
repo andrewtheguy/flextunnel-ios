@@ -25,7 +25,8 @@ final class ProxyController: ObservableObject {
     @Published var lastError: String?
     /// Current lifecycle phase; drives whether the browser is presented.
     @Published private(set) var phase: Phase = .idle
-    /// Loopback SOCKS5 port the core bound (fixed), or nil while stopped.
+    /// Loopback SOCKS5 port the core bound (an OS-assigned ephemeral port), or nil
+    /// while stopped. Used by both the browser and port forwarding.
     @Published var socksPort: UInt16?
     /// The SOCKS5 serve loop is alive (FFI health == 1). This — not the tunnel
     /// link — gates browsing: while it's up, off-list targets connect directly
@@ -60,7 +61,6 @@ final class ProxyController: ObservableObject {
     struct Settings {
         var serverNodeID: String
         var authToken: String
-        var socksPort: UInt16
         var relayURLs: [String]
     }
 
@@ -169,7 +169,9 @@ final class ProxyController: ObservableObject {
         let configDict: [String: Any] = [
             "server_node_id": s.serverNodeID,
             "auth_token": s.authToken,
-            "socks_port": Int(s.socksPort),
+            // 0 → OS-assigned ephemeral loopback port; the core returns the actual
+            // port in the result JSON below.
+            "socks_port": 0,
             "relay_urls": s.relayURLs,
             "dns_server": NSNull(),
         ]

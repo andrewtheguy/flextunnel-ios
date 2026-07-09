@@ -59,7 +59,6 @@ struct ContentView: View {
     @AppStorage("lastServerNodeID") private var serverNodeID = ""
     @State private var authToken = ""
     @State private var relayURLs = ""
-    @State private var socksPortText = "18080"
     @State private var browserModel: BrowserModel?
     @State private var didLoadToken = false
     // The immutable settings snapshot handed to `proxy.start`, so the Keychain
@@ -113,22 +112,6 @@ struct ContentView: View {
                     LabeledField("Relay URLs", hint: "comma-separated, optional") {
                         TextField("", text: $relayURLs)
                             .autocorrectionDisabled().textInputAutocapitalization(.never)
-                    }
-                    LabeledField("SOCKS bind port") {
-                        TextField("", text: $socksPortText)
-                            .keyboardType(.numberPad)
-                            .autocorrectionDisabled()
-                            .onChange(of: socksPortText) { _, newValue in
-                                let filtered = newValue.filter { $0.isNumber }
-                                if filtered != newValue {
-                                    socksPortText = filtered
-                                }
-                            }
-                    }
-                    if let portValidationMessage {
-                        Text(portValidationMessage)
-                            .foregroundStyle(.red)
-                            .font(.footnote)
                     }
                 }
 
@@ -282,34 +265,14 @@ struct ContentView: View {
         authToken.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var parsedSocksPort: UInt16? {
-        let trimmed = socksPortText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let value = Int(trimmed), (1...65535).contains(value) else {
-            return nil
-        }
-        return UInt16(value)
-    }
-
-    private var portValidationMessage: String? {
-        let trimmed = socksPortText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return "Enter a SOCKS port."
-        }
-        guard let value = Int(trimmed), (1...65535).contains(value) else {
-            return "Use a port from 1 to 65535."
-        }
-        return nil
-    }
-
     private var canStartProxy: Bool {
-        !trimmedServerNodeID.isEmpty && !trimmedAuthToken.isEmpty && parsedSocksPort != nil
+        !trimmedServerNodeID.isEmpty && !trimmedAuthToken.isEmpty
     }
 
     private func currentSettings() -> ProxyController.Settings {
         ProxyController.Settings(
             serverNodeID: trimmedServerNodeID,
             authToken: trimmedAuthToken,
-            socksPort: parsedSocksPort ?? 18080,
             relayURLs: splitCSV(relayURLs)
         )
     }
