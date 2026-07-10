@@ -29,7 +29,6 @@ struct TabTrayView: View {
                             Label("New Tab", systemImage: "plus")
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!model.proxyIsAvailable)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
@@ -60,7 +59,6 @@ struct TabTrayView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .disabled(!model.proxyIsAvailable)
                     .accessibilityLabel("New tab")
                 }
                 ToolbarItem(placement: .topBarTrailing) {

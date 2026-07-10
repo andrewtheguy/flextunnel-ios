@@ -20,7 +20,6 @@ struct BrowserView: View {
             AddressBarView(
                 model: model,
                 proxy: proxy,
-                proxyAvailable: proxyAvailable,
                 tunnelStatusIcon: tunnelStatusIcon,
                 tunnelStatusColor: tunnelStatusColor,
                 showingTunnelStatus: $showingTunnelStatus,
@@ -31,7 +30,6 @@ struct BrowserView: View {
             if let tab = model.selectedTab {
                 if tab.isHome {
                     BrowserHomeView(
-                        proxyAvailable: proxyAvailable,
                         onOpen: { model.navigate($0) })
                 } else {
                     // Keep the WebView mounted and layer the failure screen over
@@ -56,14 +54,12 @@ struct BrowserView: View {
                 }
             } else {
                 EmptyBrowserView(
-                    proxyAvailable: proxyAvailable,
                     onNewTab: { model.addTab() })
             }
 
             Divider()
             BottomActionBar(
                 model: model,
-                proxyAvailable: proxyAvailable,
                 showingTabTray: $showingTabTray,
                 showingFind: $showingFind,
                 onDisconnect: stopAndDismiss,
@@ -99,17 +95,6 @@ struct BrowserView: View {
         .fullScreenCover(isPresented: $showingTabTray) {
             TabTrayView(model: model)
         }
-        .onAppear { enforceProxyAvailability() }
-        .onChange(of: proxy.socksAlive) { enforceProxyAvailability() }
-        .onChange(of: proxy.tunnelConnected) { enforceProxyAvailability() }
-        .onChange(of: proxy.socksPort) { enforceProxyAvailability() }
-    }
-
-    /// Whether the browser is usable: the SOCKS5 listener is up and this tab's
-    /// port matches. Stays true while the tunnel link is down for a partial
-    /// split-tunnel set (off-list targets still browse directly).
-    private var proxyAvailable: Bool {
-        proxy.canBrowse && proxy.socksPort == model.socksPort
     }
 
     private var tunnelStatusIcon: String {
@@ -127,20 +112,13 @@ struct BrowserView: View {
         if proxy.tunnelStuck {
             return .red
         }
-        if proxyAvailable {
+        if proxy.canBrowse {
             return .orange
         }
         if proxy.socksPort != nil {
             return .red
         }
         return .secondary
-    }
-
-    /// Keep navigation gated to the tunnel's availability. A drop no longer
-    /// dismisses the browser — the page stays put and reconnect/quit live in the
-    /// tunnel status popover; only an explicit Quit (`stopAndDismiss`) closes it.
-    private func enforceProxyAvailability() {
-        model.proxyIsAvailable = proxyAvailable
     }
 
     private func stopAndDismiss() {
@@ -201,7 +179,6 @@ private struct DownloadStatusToast: View {
 /// a grid of search engines, mirroring Firefox iOS's default new-tab page so
 /// startup isn't a blank web view. Tapping a tile loads it through the tunnel.
 private struct BrowserHomeView: View {
-    let proxyAvailable: Bool
     let onOpen: (String) -> Void
 
     /// Search engines offered as a starting point. Favicons aren't bundled here,
@@ -258,7 +235,6 @@ private struct BrowserHomeView: View {
                             internalShortcutTile
                         }
                         .buttonStyle(.plain)
-                        .disabled(!proxyAvailable)
                     }
                 }
                 .frame(maxWidth: 420)
@@ -277,7 +253,6 @@ private struct BrowserHomeView: View {
                                 engineTile(engine)
                             }
                             .buttonStyle(.plain)
-                            .disabled(!proxyAvailable)
                         }
                     }
                 }
@@ -329,7 +304,6 @@ private struct BrowserHomeView: View {
 }
 
 private struct EmptyBrowserView: View {
-    let proxyAvailable: Bool
     let onNewTab: () -> Void
 
     var body: some View {
@@ -345,7 +319,6 @@ private struct EmptyBrowserView: View {
                 Label("New Tab", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!proxyAvailable)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
@@ -456,7 +429,6 @@ private struct BrowserCertificateWarningView: View {
 private struct AddressBarView: View {
     @Bindable var model: BrowserModel
     let proxy: ProxyController
-    let proxyAvailable: Bool
     let tunnelStatusIcon: String
     let tunnelStatusColor: Color
     @Binding var showingTunnelStatus: Bool
@@ -483,11 +455,9 @@ private struct AddressBarView: View {
                         .opacity(addressFocused ? 1 : 0)
                         .allowsHitTesting(addressFocused)
                         .onSubmit {
-                            guard proxyAvailable else { return }
                             model.navigate(editText)
                             addressFocused = false
                         }
-                        .disabled(!proxyAvailable)
 
                     if !addressFocused {
                         Button {
@@ -498,7 +468,6 @@ private struct AddressBarView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(!proxyAvailable)
                     }
                 }
                 .frame(maxWidth: .infinity, minHeight: 36)
@@ -614,13 +583,11 @@ private struct AddressBarView: View {
                     .frame(width: 40, height: 36)
             }
             .buttonStyle(.plain)
-            .disabled(!proxyAvailable)
             .accessibilityLabel(tab.page.isLoading ? "Stop loading" : "Reload")
         }
     }
 
     private func beginEditing(_ tab: BrowserTab?) {
-        guard proxyAvailable else { return }
         editText = tab?.addressText ?? editText
         addressFocused = true
     }
@@ -874,7 +841,6 @@ private struct SiteSecurityPopover: View {
 /// Bottom toolbar: back, forward, share, bookmark (placeholder), tab tray, menu.
 private struct BottomActionBar: View {
     @Bindable var model: BrowserModel
-    let proxyAvailable: Bool
     @Binding var showingTabTray: Bool
     @Binding var showingFind: Bool
     let onDisconnect: () -> Void
@@ -898,12 +864,12 @@ private struct BottomActionBar: View {
         let url = tab?.page.url
         HStack {
             Button { tab?.goBack() } label: { Image(systemName: "chevron.left") }
-                .disabled(!proxyAvailable || tab?.canGoBack != true)
+                .disabled(tab?.canGoBack != true)
 
             Spacer()
 
             Button { tab?.goForward() } label: { Image(systemName: "chevron.right") }
-                .disabled(!proxyAvailable || tab?.canGoForward != true)
+                .disabled(tab?.canGoForward != true)
 
             Spacer()
 
@@ -916,7 +882,6 @@ private struct BottomActionBar: View {
 
             if let url {
                 Button { shareItem = ShareItem(url: url) } label: { Image(systemName: "square.and.arrow.up") }
-                    .disabled(!proxyAvailable)
                     .accessibilityLabel("Share")
             } else {
                 Image(systemName: "square.and.arrow.up")

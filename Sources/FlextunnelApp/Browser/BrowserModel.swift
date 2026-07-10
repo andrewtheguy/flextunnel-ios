@@ -12,7 +12,6 @@ final class BrowserModel {
     let downloads: BrowserDownloadManager
     private(set) var tabs: [BrowserTab]
     var selectedID: BrowserTab.ID?
-    var proxyIsAvailable = true
     // Persistent (default) store so cookies, logins, and cache survive across
     // launches like a mainstream browser. (Downloads stay session-only by design.)
     private let websiteDataStore = WKWebsiteDataStore.default()
@@ -46,8 +45,7 @@ final class BrowserModel {
 
     /// Opens a fresh proxied tab at the home page and selects it.
     @discardableResult
-    func addTab() -> BrowserTab? {
-        guard proxyIsAvailable else { return nil }
+    func addTab() -> BrowserTab {
         let tab = BrowserTab.make(
             socksPort: socksPort,
             websiteDataStore: websiteDataStore,
@@ -75,18 +73,16 @@ final class BrowserModel {
     ///   directly; a missing scheme is prepended (`http://` for `.onion`, else `https://`).
     /// - Anything else is treated as a query and sent to DuckDuckGo.
     func navigate(_ text: String) {
-        guard proxyIsAvailable else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let url = Self.resolve(trimmed) else { return }
-        guard let tab = selectedTab ?? addTab() else { return }
+        let tab = selectedTab ?? addTab()
         tab.load(url, displayAddress: trimmed)
     }
 
     func stopAll() {
         tabs.forEach { $0.stop() }
         downloads.shutdown()
-        proxyIsAvailable = false
     }
 
     static func resolve(_ text: String) -> URL? {
