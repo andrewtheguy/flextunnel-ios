@@ -26,7 +26,10 @@ is ever exposed on the LAN.
 
 A forward is `localhost:<local port> → <remote host>:<remote port>`. Each
 accepted connection is relayed through the in-app SOCKS5 listener, so the core
-applies exactly the same routing as the browser:
+applies the tunnel-set routing per connection. (The browser reaches the same
+outcome but scopes it one layer earlier, at the WebKit level — see
+[split-tunnel-routing.md](split-tunnel-routing.md); forwards have no such
+front-end and always relay through the listener.)
 
 - **on-list** targets (in the server-pushed tunnel set) go through the QUIC
   tunnel and are resolved/connected **server-side** — hostnames that only

@@ -1,9 +1,12 @@
 import Foundation
+import Network
 import Observation
 import WebKit
 
-/// Owns the browser's tab list and the shared SOCKS5 port. Every tab is proxied
-/// through the same in-app listener (flextunnel allows one instance at a time).
+/// Owns the browser's tab list, the shared SOCKS5 port, and the shared data
+/// store's proxy configuration. Every tab shares the same in-app listener
+/// (flextunnel allows one instance at a time), scoped to the tunnel set's
+/// hosts via `matchDomains` so off-list traffic skips the proxy entirely.
 @MainActor
 @Observable
 final class BrowserModel {
@@ -12,24 +15,45 @@ final class BrowserModel {
     let downloads: BrowserDownloadManager
     private(set) var tabs: [BrowserTab]
     var selectedID: BrowserTab.ID?
+    /// The tunnel set's host patterns (`ForwardedRoutes.proxyMatchDomains`);
+    /// nil proxies every host.
+    private(set) var proxyMatchDomains: [String]?
     // Persistent (default) store so cookies, logins, and cache survive across
     // launches like a mainstream browser. (Downloads stay session-only by design.)
     private let websiteDataStore = WKWebsiteDataStore.default()
     private let certificateTrustStore = BrowserCertificateTrustStore()
 
-    init(socksPort: UInt16, library: BrowserLibrary) {
+    init(socksPort: UInt16, proxyMatchDomains: [String]?, library: BrowserLibrary) {
         self.socksPort = socksPort
+        self.proxyMatchDomains = proxyMatchDomains
         self.library = library
-        let downloads = BrowserDownloadManager(socksPort: socksPort, websiteDataStore: websiteDataStore)
+        websiteDataStore.proxyConfigurations = [
+            .loopbackSocks5(port: socksPort, matchDomains: proxyMatchDomains)
+        ]
+        let downloads = BrowserDownloadManager(
+            socksPort: socksPort,
+            proxyMatchDomains: proxyMatchDomains,
+            websiteDataStore: websiteDataStore)
         self.downloads = downloads
         let first = BrowserTab.make(
-            socksPort: socksPort,
             websiteDataStore: websiteDataStore,
             certificateTrustStore: certificateTrustStore,
             library: library,
             downloads: downloads)
         self.tabs = [first]
         self.selectedID = first.id
+    }
+
+    /// Applies an updated tunnel set (the server can push new routes across a
+    /// reconnect). Connections opened after this pick up the new scoping; the
+    /// proxy's own routed set keeps already-open ones correct either way.
+    func updateProxyMatchDomains(_ matchDomains: [String]?) {
+        guard matchDomains != proxyMatchDomains else { return }
+        proxyMatchDomains = matchDomains
+        websiteDataStore.proxyConfigurations = [
+            .loopbackSocks5(port: socksPort, matchDomains: matchDomains)
+        ]
+        downloads.updateProxyMatchDomains(matchDomains)
     }
 
     var selectedTab: BrowserTab? {
@@ -47,7 +71,6 @@ final class BrowserModel {
     @discardableResult
     func addTab() -> BrowserTab {
         let tab = BrowserTab.make(
-            socksPort: socksPort,
             websiteDataStore: websiteDataStore,
             certificateTrustStore: certificateTrustStore,
             library: library,
@@ -161,5 +184,20 @@ final class BrowserModel {
         // A colon in the parsed host means an IPv6 literal (URLComponents keeps
         // the port separate), e.g. https://[fdb8:d92a:f690:1abf::1]:8006.
         host == "localhost" || host.contains(".") || host.contains(":")
+    }
+}
+
+extension ProxyConfiguration {
+    /// The browser's loopback SOCKS5 proxy. With `matchDomains` set, WebKit
+    /// only proxies matching hosts (suffix match: apex + subdomains) and
+    /// connects to everything else directly; nil/empty proxies every host.
+    /// SOCKS5 passes matched hostnames to the proxy (ATYP_DOMAIN), so DNS for
+    /// tunnel-set names still resolves on the flextunnel server.
+    static func loopbackSocks5(port: UInt16, matchDomains: [String]?) -> ProxyConfiguration {
+        var config = ProxyConfiguration(socksv5Proxy: .hostPort(
+            host: "127.0.0.1",
+            port: NWEndpoint.Port(rawValue: port)!))
+        config.matchDomains = matchDomains ?? []
+        return config
     }
 }

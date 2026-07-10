@@ -16,16 +16,24 @@ There are two ways to use the tunnel, chosen on the setup screen:
   **private-network access browser**, not a privacy/anonymity browser: it
   behaves like a mainstream browser and split-tunnels by default. The flextunnel
   Rust core is embedded on-device (via `libflextunnel.xcframework`) and runs a
-  local SOCKS5 listener on loopback; the SwiftUI `WebView` routes all its
-  traffic through that listener via `WKWebsiteDataStore.proxyConfigurations`.
+  local SOCKS5 listener on loopback. When the tunnel set is hostname-only, the
+  SwiftUI `WebView` scopes that listener to it with
+  `ProxyConfiguration.matchDomains` (`WKWebsiteDataStore.proxyConfigurations`),
+  so only on-list hosts go through the proxy and everything else connects
+  directly. When the set is full-tunnel (`*` / default-route CIDR) or routes any
+  CIDR — patterns `matchDomains` can't express — host scoping is off and WebKit
+  routes every host through the proxy, so the direct-connection and
+  proxy-health-independence behavior doesn't apply.
 - **Forward ports** — run the proxy without the browser and forward local
   `localhost` ports to private hosts, so other apps on the device (SSH, RDP,
   databases…) can reach them.
 
 ## Documentation
 
-- [Split-tunnel routing](docs/split-tunnel-routing.md) — how tunnel-vs-direct is
-  decided, the server-pushed tunnel set, and verifying server-side DNS.
+- [Split-tunnel routing](docs/split-tunnel-routing.md) — the two layers that
+  decide tunnel-vs-direct (the Rust core and WebKit `matchDomains`), the
+  server-pushed tunnel set, browser independence from proxy health, and
+  verifying the split.
 - [Proxy-only mode & port forwarding](docs/port-forwarding.md) — the SOCKS5
   endpoint and localhost port forwards for other apps, background behavior,
   what forwards are good for, and troubleshooting.

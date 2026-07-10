@@ -26,12 +26,13 @@ final class ProxyController: ObservableObject {
     /// Current lifecycle phase; drives whether the browser is presented.
     @Published private(set) var phase: Phase = .idle
     /// Loopback SOCKS5 port the core actually bound, or nil while stopped. In
-    /// browser mode this is an OS-assigned ephemeral port; in proxy-only mode it
-    /// is the fixed port the user chose (shown so other apps can point at it).
+    /// browser mode this is a per-session random port (fixed for the session so
+    /// it survives reconnects); in proxy-only mode it is the fixed port the user
+    /// chose (shown so other apps can point at it).
     @Published var socksPort: UInt16?
-    /// The SOCKS5 serve loop is alive (FFI health == 1). This — not the tunnel
-    /// link — gates browsing: while it's up, off-list targets connect directly
-    /// even if the tunnel is down.
+    /// The SOCKS5 serve loop is alive (FFI health == 1). Only tunnel-set hosts
+    /// depend on it: the browser splits at the connection layer (WebKit
+    /// `matchDomains`), so off-list browsing works regardless of proxy health.
     @Published var socksAlive: Bool = false
     /// The tunnel link to the server is up (handshake live). On-list targets (in
     /// the routed tunnel set) only work while this is true; off-list targets don't.
@@ -101,9 +102,10 @@ final class ProxyController: ObservableObject {
     struct Settings {
         var serverNodeID: String
         var authToken: String
-        /// Loopback port for the SOCKS5 listener. `0` binds an OS-assigned
-        /// ephemeral port (browser mode — the port is internal). Proxy-only mode
-        /// passes a fixed, user-chosen port other apps on the device point at.
+        /// Loopback port for the SOCKS5 listener. Browser mode passes a random
+        /// per-session port (kept internal); proxy-only mode passes a fixed,
+        /// user-chosen port other apps on the device point at. `0` (OS-assigned
+        /// ephemeral) is only a pre-session fallback.
         var socksPort: UInt16
         var relayURLs: [String]
     }
@@ -142,6 +144,31 @@ final class ProxyController: ObservableObject {
         /// tunnel drop is a full outage (nothing is off-list to browse directly).
         var isFullTunnel: Bool {
             domains.contains("*") || cidrs.contains { $0 == "0.0.0.0/0" || $0 == "::/0" }
+        }
+
+        /// Host patterns for WebKit-level split-tunneling
+        /// (`ProxyConfiguration.matchDomains`): matching hosts go through the
+        /// SOCKS5 proxy, everything else connects directly from the network
+        /// process (local DNS, HTTP/3, no loopback hop). Nil means the whole
+        /// optimization is off and every host goes through the proxy — required
+        /// when the set is full-tunnel or routes CIDRs, which hostname patterns
+        /// can't express (an IP-literal URL must still reach the proxy's CIDR
+        /// check).
+        ///
+        /// WebKit suffix-matches each entry (apex + all subdomains), a superset
+        /// of the core's exact/`*.` rules, so both rule forms map to the bare
+        /// domain. Over-matching is safe: the local proxy's routed set makes the
+        /// exact tunnel-vs-direct call for whatever reaches it. Under-matching
+        /// would break private hosts, so the list must cover everything the core
+        /// would tunnel — including the always-tunneled `flextunnel.internal`
+        /// namespace.
+        var proxyMatchDomains: [String]? {
+            guard !isFullTunnel, cidrs.isEmpty else { return nil }
+            var bases = Set(domains.map { domain in
+                domain.hasPrefix("*.") ? String(domain.dropFirst(2)).lowercased() : domain.lowercased()
+            })
+            bases.insert("flextunnel.internal")
+            return bases.sorted()
         }
     }
 
@@ -202,26 +229,25 @@ final class ProxyController: ObservableObject {
 
         var id: String { name }
 
-        /// The bridge's match rules (domains then CIDRs) for a compact display.
-        var rules: [String] { domains + cidrs }
+        /// A structured, multi-line summary for the status views: the bridge name,
+        /// then its endpoint id and the routed domains/CIDRs as bulleted lists.
+        var summary: String {
+            var lines = ["\(name):", "  endpoint id: \(endpointID)"]
+            if !domains.isEmpty {
+                lines.append("  routed domains:")
+                lines.append(contentsOf: domains.map { "    - \($0)" })
+            }
+            if !cidrs.isEmpty {
+                lines.append("  routed CIDRs:")
+                lines.append(contentsOf: cidrs.map { "    - \($0)" })
+            }
+            return lines.joined(separator: "\n")
+        }
     }
 
     /// True when everything is routed through the tunnel (full-tunnel set), so a
     /// drop leaves nothing to browse directly.
     var isFullTunnel: Bool { forwardedRoutes?.isFullTunnel ?? false }
-
-    /// Whether the browser is usable right now. Fails closed to match the core,
-    /// which routes nothing until the first handshake learns the tunnel set: the
-    /// SOCKS5 listener must be up and either the tunnel is connected or the route
-    /// policy is known to be a partial split (off-list targets browse directly).
-    /// While `forwardedRoutes` is still nil (pre-handshake or mid-relaunch) or the
-    /// set is full-tunnel while the link is down, browsing stays blocked.
-    var canBrowse: Bool {
-        guard socksAlive else { return false }
-        if tunnelConnected { return true }
-        guard let routes = forwardedRoutes else { return false }
-        return !routes.isFullTunnel
-    }
 
     init() {
         flextunnel_init_logging()
@@ -237,8 +263,9 @@ final class ProxyController: ObservableObject {
         let configDict: [String: Any] = [
             "server_node_id": s.serverNodeID,
             "auth_token": s.authToken,
-            // 0 → OS-assigned ephemeral loopback port (browser); a fixed value in
-            // proxy-only mode. The core returns the actual bound port below.
+            // A fixed loopback port: a per-session random port in browser mode, the
+            // user's chosen port in proxy-only mode. The core returns the actual
+            // bound port below.
             "socks_port": Int(s.socksPort),
             "relay_urls": s.relayURLs,
             "dns_server": NSNull(),
