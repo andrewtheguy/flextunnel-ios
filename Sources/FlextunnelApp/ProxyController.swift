@@ -145,6 +145,31 @@ final class ProxyController: ObservableObject {
         var isFullTunnel: Bool {
             domains.contains("*") || cidrs.contains { $0 == "0.0.0.0/0" || $0 == "::/0" }
         }
+
+        /// Host patterns for WebKit-level split-tunneling
+        /// (`ProxyConfiguration.matchDomains`): matching hosts go through the
+        /// SOCKS5 proxy, everything else connects directly from the network
+        /// process (local DNS, HTTP/3, no loopback hop). Nil means the whole
+        /// optimization is off and every host goes through the proxy — required
+        /// when the set is full-tunnel or routes CIDRs, which hostname patterns
+        /// can't express (an IP-literal URL must still reach the proxy's CIDR
+        /// check).
+        ///
+        /// WebKit suffix-matches each entry (apex + all subdomains), a superset
+        /// of the core's exact/`*.` rules, so both rule forms map to the bare
+        /// domain. Over-matching is safe: the local proxy's routed set makes the
+        /// exact tunnel-vs-direct call for whatever reaches it. Under-matching
+        /// would break private hosts, so the list must cover everything the core
+        /// would tunnel — including the always-tunneled `flextunnel.internal`
+        /// namespace.
+        var proxyMatchDomains: [String]? {
+            guard !isFullTunnel, cidrs.isEmpty else { return nil }
+            var bases = Set(domains.map { domain in
+                domain.hasPrefix("*.") ? String(domain.dropFirst(2)).lowercased() : domain.lowercased()
+            })
+            bases.insert("flextunnel.internal")
+            return bases.sorted()
+        }
     }
 
     /// A single connection-path snapshot — one iroh path to the server — for the

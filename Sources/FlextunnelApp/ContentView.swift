@@ -237,6 +237,11 @@ struct ContentView: View {
                 syncLiveActivity()
             }
             .onChange(of: proxy.tunnelConnected) { syncLiveActivity() }
+            // A reconnect can land a changed tunnel set; keep the browser's
+            // WebKit-level split-tunneling (matchDomains) in step with it.
+            .onChange(of: proxy.forwardedRoutes?.proxyMatchDomains) { _, matchDomains in
+                browserModel?.updateProxyMatchDomains(matchDomains)
+            }
             // `tunnelStuck` flips without `tunnelConnected`/`socksAlive` changing,
             // so it needs its own trigger to refresh the banner (→ "Disconnected").
             .onChange(of: proxy.tunnelStuck) { syncLiveActivity() }
@@ -371,11 +376,16 @@ struct ContentView: View {
 
         switch sessionMode {
         case .browser:
+            // Routes are known here: the poll learns them before flipping the
+            // phase to connected. Nil (defensively) proxies every host.
+            let matchDomains = proxy.forwardedRoutes?.proxyMatchDomains
             if browserModel == nil {
-                browserModel = BrowserModel(socksPort: socksPort, library: library)
+                browserModel = BrowserModel(
+                    socksPort: socksPort, proxyMatchDomains: matchDomains, library: library)
             } else if browserModel?.socksPort != socksPort {
                 browserModel?.stopAll()
-                browserModel = BrowserModel(socksPort: socksPort, library: library)
+                browserModel = BrowserModel(
+                    socksPort: socksPort, proxyMatchDomains: matchDomains, library: library)
             }
         case .proxyOnly:
             proxyOnlyActive = true

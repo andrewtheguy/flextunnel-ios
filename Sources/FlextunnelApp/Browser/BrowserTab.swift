@@ -1,17 +1,12 @@
 import Foundation
-import Network
 import Observation
 import Security
 import WebKit
 import os.log
 
-/// A single browser tab: an iOS 26 `WebPage` whose traffic is routed through the
-/// in-app flextunnel SOCKS5 listener at 127.0.0.1:<socksPort> via
-/// `WebPage.Configuration.websiteDataStore.proxyConfigurations`.
-///
-/// SOCKS5 passes the hostname to the proxy (ATYP_DOMAIN), so DNS is resolved on
-/// the flextunnel **server**, not the device — the same mechanism that lets Onion
-/// Browser resolve `.onion` names through Tor's local SOCKS proxy.
+/// A single browser tab: an iOS 26 `WebPage` sharing `BrowserModel`'s data
+/// store, whose `proxyConfigurations` routes tunnel-set hosts through the
+/// in-app flextunnel SOCKS5 listener and lets everything else connect directly.
 @MainActor
 @Observable
 final class BrowserTab: Identifiable {
@@ -59,11 +54,10 @@ final class BrowserTab: Identifiable {
         self.library = library
     }
 
-    /// Build a tab whose `WebPage` is proxied through the loopback SOCKS5 listener.
-    /// All tabs share the persistent default data store, so cookies and logins
-    /// carry across tabs and survive relaunch.
+    /// Build a tab on the shared data store, so cookies and logins carry across
+    /// tabs and survive relaunch — and so the store's proxy configuration
+    /// (owned by `BrowserModel`) applies to it.
     static func make(
-        socksPort: UInt16,
         websiteDataStore: WKWebsiteDataStore,
         certificateTrustStore: BrowserCertificateTrustStore,
         library: BrowserLibrary,
@@ -71,11 +65,6 @@ final class BrowserTab: Identifiable {
     ) -> BrowserTab {
         var config = WebPage.Configuration()
         config.websiteDataStore = websiteDataStore
-
-        let endpoint = NWEndpoint.hostPort(
-            host: "127.0.0.1",
-            port: NWEndpoint.Port(rawValue: socksPort)!)
-        config.websiteDataStore.proxyConfigurations = [ProxyConfiguration(socksv5Proxy: endpoint)]
 
         let navigationDecider = BrowserNavigationDecider(certificateTrustStore: certificateTrustStore)
         let tab = BrowserTab(
@@ -175,7 +164,7 @@ final class BrowserTab: Identifiable {
         addressText = displayAddress ?? url.absoluteString
         loadFailure = nil
         hasCommittedNavigation = false
-        log.info("loading host \(Self.logHost(for: url), privacy: .public) via in-app SOCKS5")
+        log.info("loading host \(Self.logHost(for: url), privacy: .public)")
         page.load(URLRequest(url: url))
     }
 
