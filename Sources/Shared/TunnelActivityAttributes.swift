@@ -18,7 +18,8 @@ struct TunnelActivityAttributes: ActivityAttributes {
         var statusText: String
     }
 
-    /// Static part: fixed for the life of the activity.
-    var serverLabel: String
-    var modeTitle: String
+    /// Static part: fixed for the life of the activity. The title is always
+    /// "Flextunnel" (hardcoded in the widget); this is the helpful line under
+    /// it, e.g. "SOCKS proxy on localhost:18080".
+    var subtitle: String
 }

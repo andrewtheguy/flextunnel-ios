@@ -38,7 +38,7 @@ final class LiveActivityController {
     /// activity is `.ended`/`.dismissed` (e.g. a survivor reattached on launch),
     /// drop it and request a fresh one so the banner reappears for a still-
     /// connected session.
-    func start(serverLabel: String, modeTitle: String, state: TunnelActivityAttributes.ContentState) {
+    func start(subtitle: String, state: TunnelActivityAttributes.ContentState) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         if let current = activity {
             switch current.activityState {
@@ -54,7 +54,7 @@ final class LiveActivityController {
                 break
             }
         }
-        let attributes = TunnelActivityAttributes(serverLabel: serverLabel, modeTitle: modeTitle)
+        let attributes = TunnelActivityAttributes(subtitle: subtitle)
         do {
             activity = try Activity.request(
                 attributes: attributes,

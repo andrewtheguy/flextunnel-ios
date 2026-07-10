@@ -20,7 +20,7 @@ struct TunnelLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Label(context.attributes.serverLabel, systemImage: "lock.shield.fill")
+                    Label("Flextunnel", systemImage: "lock.shield.fill")
                         .font(.caption)
                         .lineLimit(1)
                 }
@@ -28,7 +28,7 @@ struct TunnelLiveActivity: Widget {
                     StatusPill(state: context.state, isStale: context.isStale)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text(context.isStale ? "Open app to refresh" : context.attributes.modeTitle)
+                    Text(context.isStale ? "Open app to refresh" : context.attributes.subtitle)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -58,10 +58,10 @@ private struct LockScreenView: View {
                 .font(.title2)
                 .foregroundStyle(statusColor(state, isStale: isStale))
             VStack(alignment: .leading, spacing: 2) {
-                Text(attributes.serverLabel)
+                Text("Flextunnel")
                     .font(.headline)
                     .lineLimit(1)
-                Text(isStale ? "Open app to refresh" : attributes.modeTitle)
+                Text(isStale ? "Open app to refresh" : attributes.subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

@@ -462,9 +462,15 @@ struct ContentView: View {
 
     /// Mirror the session into the Live Activity: start/refresh it while connected,
     /// reflect a reconnect while connecting, and end it once the session is gone.
+    /// Proxy-only sessions only — a browser session is used in the foreground, so
+    /// a lock-screen banner adds nothing there (and would just be noise).
     /// `allowCreate` is false for background refreshes, which must never call
     /// `Activity.request` (foreground-only) — they only update/end an existing one.
     private func syncLiveActivity(allowCreate: Bool = true) {
+        guard sessionMode == .proxyOnly else {
+            liveActivity.end()
+            return
+        }
         switch proxy.phase {
         case .connected:
             let state = TunnelActivityAttributes.ContentState(
@@ -473,11 +479,7 @@ struct ContentView: View {
                 statusText: liveActivityStatusText
             )
             if allowCreate {
-                liveActivity.start(
-                    serverLabel: liveActivityServerLabel,
-                    modeTitle: sessionMode.title,
-                    state: state
-                )
+                liveActivity.start(subtitle: liveActivitySubtitle, state: state)
             } else {
                 liveActivity.update(state)
             }
@@ -496,9 +498,10 @@ struct ContentView: View {
         }
     }
 
-    private var liveActivityServerLabel: String {
-        let id = proxy.connectionSummary?.serverNodeID ?? trimmedServerNodeID
-        return id.isEmpty ? "Tunnel" : id
+    /// The line under the "Flextunnel" title: where other apps reach the proxy.
+    private var liveActivitySubtitle: String {
+        guard let port = proxy.socksPort else { return "Port forwarding" }
+        return "SOCKS proxy on localhost:\(port)"
     }
 
     private var liveActivityStatusText: String {
