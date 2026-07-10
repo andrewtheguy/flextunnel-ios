@@ -73,7 +73,8 @@ The tunnel set is shown under **Tunnel status** in the browser and on the
 port-forwarding screen (tunneled domains/CIDRs, or "Full tunnel (all traffic)"
 when the set routes everything). The status popover's **Bound SOCKS** row shows
 the loopback address while the listener is serving, or `none — … not listening`
-in red when the core is stopped — a reminder that only tunnel-set hosts depend
+in red whenever the listener is unavailable — startup, a reconnect gap, a bind
+failure, or the core stopped — a reminder that only tunnel-set hosts depend
 on it.
 
 ## Verifying the split

@@ -16,10 +16,14 @@ There are two ways to use the tunnel, chosen on the setup screen:
   **private-network access browser**, not a privacy/anonymity browser: it
   behaves like a mainstream browser and split-tunnels by default. The flextunnel
   Rust core is embedded on-device (via `libflextunnel.xcframework`) and runs a
-  local SOCKS5 listener on loopback. The SwiftUI `WebView` scopes that listener
-  to the server-pushed tunnel set with `ProxyConfiguration.matchDomains`
-  (`WKWebsiteDataStore.proxyConfigurations`), so only on-list hosts go through
-  the proxy and everything else connects directly.
+  local SOCKS5 listener on loopback. When the tunnel set is hostname-only, the
+  SwiftUI `WebView` scopes that listener to it with
+  `ProxyConfiguration.matchDomains` (`WKWebsiteDataStore.proxyConfigurations`),
+  so only on-list hosts go through the proxy and everything else connects
+  directly. When the set is full-tunnel (`*` / default-route CIDR) or routes any
+  CIDR — patterns `matchDomains` can't express — host scoping is off and WebKit
+  routes every host through the proxy, so the direct-connection and
+  proxy-health-independence behavior doesn't apply.
 - **Forward ports** — run the proxy without the browser and forward local
   `localhost` ports to private hosts, so other apps on the device (SSH, RDP,
   databases…) can reach them.
