@@ -239,8 +239,14 @@ struct ContentView: View {
             .onChange(of: proxy.tunnelConnected) { syncLiveActivity() }
             // A reconnect can land a changed tunnel set; keep the browser's
             // WebKit-level split-tunneling (matchDomains) in step with it.
-            .onChange(of: proxy.forwardedRoutes?.proxyMatchDomains) { _, matchDomains in
-                browserModel?.updateProxyMatchDomains(matchDomains)
+            // Double optional on purpose: the outer nil (routes cleared while a
+            // relaunch re-handshakes) keeps the last known scoping — browsing
+            // stays independent of the proxy through the gap — while an inner
+            // nil (full-tunnel set) must be applied.
+            .onChange(of: proxy.forwardedRoutes.map(\.proxyMatchDomains)) { _, known in
+                if let matchDomains = known {
+                    browserModel?.updateProxyMatchDomains(matchDomains)
+                }
             }
             // `tunnelStuck` flips without `tunnelConnected`/`socksAlive` changing,
             // so it needs its own trigger to refresh the banner (→ "Disconnected").

@@ -102,21 +102,18 @@ struct BrowserView: View {
         return proxy.tunnelStuck ? "bolt.slash.circle.fill" : "bolt.horizontal.circle.fill"
     }
 
-    /// Green when the tunnel link is up, orange when browsing still works but the
-    /// tunnel is down (off-list only), red when the link is stuck disconnected or
-    /// the proxy is unusable.
+    /// Green when the tunnel link is up; red when it's stuck disconnected or the
+    /// set is full-tunnel (nothing browses without it); orange for a transient
+    /// gap — off-list browsing keeps working directly either way.
     private var tunnelStatusColor: Color {
         if proxy.tunnelConnected {
             return .green
         }
-        if proxy.tunnelStuck {
+        if proxy.tunnelStuck || proxy.isFullTunnel {
             return .red
-        }
-        if proxy.canBrowse {
-            return .orange
         }
         if proxy.socksPort != nil {
-            return .red
+            return .orange
         }
         return .secondary
     }
@@ -1053,7 +1050,18 @@ private struct TunnelStatusPopover: View {
                     DetailRow("SOCKS proxy", proxy.socksAlive ? "running" : "stopped",
                               valueColor: proxy.socksAlive ? .green : .red)
                     DetailRow("Tunnel link", tunnelLinkText, valueColor: healthColor)
-                    DetailRow("Bound SOCKS", "127.0.0.1:\(proxy.socksPort ?? boundPort)")
+                    // Where the browser sends tunnel-set hosts. Off-list hosts
+                    // never touch it (WebKit's matchDomains split happens before
+                    // any connection), so while nothing is listening only
+                    // tunnel-set hosts fail.
+                    if proxy.socksAlive {
+                        DetailRow("Bound SOCKS", "127.0.0.1:\(proxy.socksPort ?? boundPort)")
+                    } else {
+                        DetailRow(
+                            "Bound SOCKS",
+                            "none — 127.0.0.1:\(proxy.socksPort ?? boundPort) not listening",
+                            valueColor: .red)
+                    }
 
                     if let summary = proxy.connectionSummary {
                         DetailRow("Server node id", summary.serverNodeID, monospace: true)
@@ -1102,8 +1110,8 @@ private struct TunnelStatusPopover: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        if proxy.canBrowse {
-                            Text("Off-list browsing works; on-list (tunneled) routes are temporarily unavailable.")
+                        if !proxy.isFullTunnel {
+                            Text("Off-list browsing keeps working directly; on-list (tunneled) routes are temporarily unavailable.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -1192,8 +1200,8 @@ private struct TunnelStatusPopover: View {
     private var healthTitle: String {
         if proxy.tunnelConnected { return "Tunnel connected" }
         if proxy.tunnelStuck { return "Tunnel disconnected" }
-        if proxy.canBrowse { return "Tunnel reconnecting" }
-        return "Tunnel unavailable"
+        if proxy.socksAlive { return "Tunnel reconnecting" }
+        return "Proxy stopped"
     }
 
     private var healthIcon: String {
@@ -1204,7 +1212,7 @@ private struct TunnelStatusPopover: View {
     private var healthColor: Color {
         if proxy.tunnelConnected { return .green }
         if proxy.tunnelStuck { return .red }
-        if proxy.canBrowse { return .orange }
+        if proxy.socksAlive { return .orange }
         return .red
     }
 

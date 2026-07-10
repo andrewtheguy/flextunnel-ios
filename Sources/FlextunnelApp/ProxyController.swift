@@ -30,9 +30,9 @@ final class ProxyController: ObservableObject {
     /// it survives reconnects); in proxy-only mode it is the fixed port the user
     /// chose (shown so other apps can point at it).
     @Published var socksPort: UInt16?
-    /// The SOCKS5 serve loop is alive (FFI health == 1). This — not the tunnel
-    /// link — gates browsing: while it's up, off-list targets connect directly
-    /// even if the tunnel is down.
+    /// The SOCKS5 serve loop is alive (FFI health == 1). Only tunnel-set hosts
+    /// depend on it: the browser splits at the connection layer (WebKit
+    /// `matchDomains`), so off-list browsing works regardless of proxy health.
     @Published var socksAlive: Bool = false
     /// The tunnel link to the server is up (handshake live). On-list targets (in
     /// the routed tunnel set) only work while this is true; off-list targets don't.
@@ -236,19 +236,6 @@ final class ProxyController: ObservableObject {
     /// True when everything is routed through the tunnel (full-tunnel set), so a
     /// drop leaves nothing to browse directly.
     var isFullTunnel: Bool { forwardedRoutes?.isFullTunnel ?? false }
-
-    /// Whether the browser is usable right now. Fails closed to match the core,
-    /// which routes nothing until the first handshake learns the tunnel set: the
-    /// SOCKS5 listener must be up and either the tunnel is connected or the route
-    /// policy is known to be a partial split (off-list targets browse directly).
-    /// While `forwardedRoutes` is still nil (pre-handshake or mid-relaunch) or the
-    /// set is full-tunnel while the link is down, browsing stays blocked.
-    var canBrowse: Bool {
-        guard socksAlive else { return false }
-        if tunnelConnected { return true }
-        guard let routes = forwardedRoutes else { return false }
-        return !routes.isFullTunnel
-    }
 
     init() {
         flextunnel_init_logging()
