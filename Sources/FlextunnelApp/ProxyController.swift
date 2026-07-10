@@ -26,8 +26,9 @@ final class ProxyController: ObservableObject {
     /// Current lifecycle phase; drives whether the browser is presented.
     @Published private(set) var phase: Phase = .idle
     /// Loopback SOCKS5 port the core actually bound, or nil while stopped. In
-    /// browser mode this is an OS-assigned ephemeral port; in proxy-only mode it
-    /// is the fixed port the user chose (shown so other apps can point at it).
+    /// browser mode this is a per-session random port (fixed for the session so
+    /// it survives reconnects); in proxy-only mode it is the fixed port the user
+    /// chose (shown so other apps can point at it).
     @Published var socksPort: UInt16?
     /// The SOCKS5 serve loop is alive (FFI health == 1). This — not the tunnel
     /// link — gates browsing: while it's up, off-list targets connect directly
@@ -101,9 +102,10 @@ final class ProxyController: ObservableObject {
     struct Settings {
         var serverNodeID: String
         var authToken: String
-        /// Loopback port for the SOCKS5 listener. `0` binds an OS-assigned
-        /// ephemeral port (browser mode — the port is internal). Proxy-only mode
-        /// passes a fixed, user-chosen port other apps on the device point at.
+        /// Loopback port for the SOCKS5 listener. Browser mode passes a random
+        /// per-session port (kept internal); proxy-only mode passes a fixed,
+        /// user-chosen port other apps on the device point at. `0` (OS-assigned
+        /// ephemeral) is only a pre-session fallback.
         var socksPort: UInt16
         var relayURLs: [String]
     }
@@ -237,8 +239,9 @@ final class ProxyController: ObservableObject {
         let configDict: [String: Any] = [
             "server_node_id": s.serverNodeID,
             "auth_token": s.authToken,
-            // 0 → OS-assigned ephemeral loopback port (browser); a fixed value in
-            // proxy-only mode. The core returns the actual bound port below.
+            // A fixed loopback port: a per-session random port in browser mode, the
+            // user's chosen port in proxy-only mode. The core returns the actual
+            // bound port below.
             "socks_port": Int(s.socksPort),
             "relay_urls": s.relayURLs,
             "dns_server": NSNull(),

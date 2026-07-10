@@ -60,9 +60,15 @@ struct ContentView: View {
     @State private var authToken = ""
     @State private var relayURLs = ""
     // Proxy-only mode's fixed SOCKS5 port, which other apps on the device point
-    // at (shown on the proxy-only screen). Browser mode ignores it and binds an
-    // ephemeral port instead.
+    // at (shown on the proxy-only screen). Browser mode ignores it and uses its
+    // own per-session random port (`browserSessionPort`) instead.
     @AppStorage("lastSocksPort") private var socksPortText = "18080"
+    // Browser mode's loopback SOCKS5 port. Unlike proxy-only's user-chosen fixed
+    // port, this is picked at random (private/dynamic range) once per session and
+    // held until the session exits, so it stays stable across the core's own
+    // reconnects — a moving port would rebuild `BrowserModel` and tear down every
+    // open tab. Nil while no browser session is running; regenerated per session.
+    @State private var browserSessionPort: UInt16?
     @State private var browserModel: BrowserModel?
     @State private var didLoadToken = false
     // The immutable settings snapshot handed to `proxy.start`, so the Keychain
@@ -260,6 +266,9 @@ struct ContentView: View {
         } set: { isPresented in
             if !isPresented, proxy.socksPort == nil {
                 browserModel = nil
+                // Session over: drop the port so the next browser session picks a
+                // fresh random one.
+                browserSessionPort = nil
             }
         }
     }
@@ -283,6 +292,11 @@ struct ContentView: View {
         // (Mid-session reconnects don't come through here, so they keep the
         // toggles as set.)
         portForwards.disableAll()
+        // Fix a random port for the whole browser session up front, so it survives
+        // reconnects (which replay these settings). Cleared when the session exits.
+        if mode == .browser, browserSessionPort == nil {
+            browserSessionPort = UInt16.random(in: 49152...65535)
+        }
         let settings = currentSettings()
         connectingSettings = settings
         proxy.start(settings)
@@ -325,8 +339,9 @@ struct ContentView: View {
         ProxyController.Settings(
             serverNodeID: trimmedServerNodeID,
             authToken: trimmedAuthToken,
-            // Browser: 0 → ephemeral. Proxy-only: the user's fixed port.
-            socksPort: sessionMode == .proxyOnly ? (parsedSocksPort ?? 18080) : 0,
+            // Proxy-only: the user's fixed port. Browser: the session's random
+            // port, held across reconnects (0 only as a pre-session fallback).
+            socksPort: sessionMode == .proxyOnly ? (parsedSocksPort ?? 18080) : (browserSessionPort ?? 0),
             relayURLs: splitCSV(relayURLs)
         )
     }
