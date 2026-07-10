@@ -14,6 +14,7 @@ struct BrowserView: View {
     @State private var showingTabTray = false
     @State private var showBookmarkSaved = false
     @State private var showingFind = false
+    @State private var addressBarFocused = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,6 +24,7 @@ struct BrowserView: View {
                 tunnelStatusIcon: tunnelStatusIcon,
                 tunnelStatusColor: tunnelStatusColor,
                 showingTunnelStatus: $showingTunnelStatus,
+                addressBarFocused: $addressBarFocused,
                 onReconnect: { proxy.retryNow() },
                 onStopAndReconfigure: stopAndDismiss)
             Divider()
@@ -30,7 +32,7 @@ struct BrowserView: View {
             if let tab = model.selectedTab {
                 if tab.isHome {
                     BrowserHomeView(
-                        onOpen: { model.navigate($0) })
+                        onOpen: openFromHome)
                 } else {
                     // Keep the WebView mounted and layer the failure screen over
                     // it, so retrying toggles an overlay instead of tearing down
@@ -49,6 +51,13 @@ struct BrowserView: View {
                                 BrowserLoadFailureView(
                                     failure: failure,
                                     onRetry: { tab.retryFailedLoad() })
+                            }
+                        }
+                        .overlay {
+                            if addressBarFocused {
+                                BrowserHomeView(
+                                    onOpen: openFromHome)
+                                    .transition(.opacity)
                             }
                         }
                 }
@@ -85,6 +94,7 @@ struct BrowserView: View {
                 .presentationDragIndicator(.visible)
         }
         .animation(.easeInOut(duration: 0.25), value: model.downloads.toast)
+        .animation(.easeInOut(duration: 0.18), value: addressBarFocused)
         .onChange(of: model.downloads.toast) {
             // Auto-clear the terminal download toast after a moment.
             guard let shown = model.downloads.toast else { return }
@@ -95,6 +105,11 @@ struct BrowserView: View {
         .fullScreenCover(isPresented: $showingTabTray) {
             TabTrayView(model: model)
         }
+    }
+
+    private func openFromHome(_ address: String) {
+        addressBarFocused = false
+        model.navigate(address)
     }
 
     private var tunnelStatusIcon: String {
@@ -429,6 +444,7 @@ private struct AddressBarView: View {
     let tunnelStatusIcon: String
     let tunnelStatusColor: Color
     @Binding var showingTunnelStatus: Bool
+    @Binding var addressBarFocused: Bool
     let onReconnect: () -> Void
     let onStopAndReconfigure: () -> Void
     @State private var editText = ""
@@ -503,8 +519,19 @@ private struct AddressBarView: View {
             } else {
                 syncAddress(tab?.addressText)
             }
+            if addressBarFocused != focused {
+                addressBarFocused = focused
+            }
         }
-        .onAppear { syncAddress(tab?.addressText) }
+        .onChange(of: addressBarFocused) { _, focused in
+            if addressFocused != focused {
+                addressFocused = focused
+            }
+        }
+        .onAppear {
+            syncAddress(tab?.addressText)
+            addressBarFocused = addressFocused
+        }
     }
 
     private var tunnelStatusButton: some View {
