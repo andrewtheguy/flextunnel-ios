@@ -1157,7 +1157,7 @@ private struct TunnelStatusPopover: View {
                 }
 
                 Button(role: .destructive, action: onStopAndReconfigure) {
-                    Label("Stop and Reconfigure", systemImage: "stop.circle")
+                    Label("Stop", systemImage: "stop.circle")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
