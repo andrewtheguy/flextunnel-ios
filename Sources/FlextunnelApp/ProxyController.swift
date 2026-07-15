@@ -1,15 +1,15 @@
 import Foundation
 import Combine
 
-/// Drives the in-process flextunnel SOCKS5 proxy via the Rust FFI
-/// (libflextunnel.a). There is no VPN / Network Extension — `start()` spawns the
-/// connect/serve loop inside this process and hands back the loopback port that
-/// `ProxyWebView` points a WKWebView at.
+/// Drives the in-process flextunnel session via the Rust FFI
+/// (libflextunnel.a). Browser sessions expose a SOCKS5 port to WKWebView;
+/// forwarding-only sessions expose no proxy and use native server-direct
+/// forward listeners.
 @MainActor
 final class ProxyController: ObservableObject {
     /// Lifecycle phase. Drives whether the browser is presented: it appears once
     /// we reach `.connected` (the first handshake landed). Because the core keeps
-    /// the SOCKS5 listener serving and reconnects the tunnel on its own across
+    /// the native session serving and reconnects the tunnel on its own across
     /// drops, the browser then stays presented until an explicit quit.
     enum Phase: Equatable {
         case idle
@@ -27,18 +27,19 @@ final class ProxyController: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     /// Loopback SOCKS5 port the core actually bound, or nil while stopped. In
     /// browser mode this is a per-session random port (fixed for the session so
-    /// it survives reconnects); in proxy-only mode it is the fixed port the user
-    /// chose (shown so other apps can point at it).
+    /// it survives reconnects); forwarding-only mode leaves it nil.
     @Published var socksPort: UInt16?
-    /// The SOCKS5 serve loop is alive (FFI health == 1). Only tunnel-set hosts
-    /// depend on it: the browser splits at the connection layer (WebKit
-    /// `matchDomains`), so off-list browsing works regardless of proxy health.
-    @Published var socksAlive: Bool = false
+    /// The native tunnel session is alive (FFI health == 1). In browser mode it
+    /// also owns the SOCKS5 listener; forwarding-only mode has no proxy listener.
+    @Published var sessionAlive: Bool = false
+    /// Changes for every successfully-created native session. Port forwarding
+    /// uses this to apply its desired listener set to a replacement handle.
+    @Published private(set) var forwardingSessionID: UUID?
     /// The tunnel link to the server is up (handshake live). On-list targets (in
     /// the routed tunnel set) only work while this is true; off-list targets don't.
     @Published var tunnelConnected: Bool = false
     /// The tunnel link has been down for longer than `reconnectGrace` while the
-    /// SOCKS loop stayed alive: the core's own reconnect is presumed stuck, so
+    /// native session stayed alive: the core's own reconnect is presumed stuck, so
     /// the UI shows a disconnected state and offers a manual Retry.
     @Published private(set) var tunnelStuck: Bool = false
     /// Non-secret settings for the currently running proxy, safe to show in UI.
@@ -53,6 +54,9 @@ final class ProxyController: ObservableObject {
     /// (which doesn't fire while backgrounded). Only invoked while
     /// `backgroundLiveActivityRefreshEnabled` is set.
     var onBackgroundLiveActivityRefresh: (() -> Void)?
+    /// Called after each native health poll so the port-forward controller can
+    /// refresh listener and active-connection status.
+    var onForwardStatusRefresh: (() -> Void)?
     /// Set by `ContentView` while the app is in the background AND the keep-alive
     /// session is holding the process; gates `onBackgroundLiveActivityRefresh`.
     /// Clearing it resets the keep-alive refresh clock so the next background
@@ -81,7 +85,7 @@ final class ProxyController: ObservableObject {
     private var liveActivityState: LiveActivityState {
         LiveActivityState(
             phase: phase,
-            socksAlive: socksAlive,
+            socksAlive: sessionAlive,
             tunnelConnected: tunnelConnected,
             tunnelStuck: tunnelStuck)
     }
@@ -102,11 +106,9 @@ final class ProxyController: ObservableObject {
     struct Settings {
         var serverNodeID: String
         var authToken: String
-        /// Loopback port for the SOCKS5 listener. Browser mode passes a random
-        /// per-session port (kept internal); proxy-only mode passes a fixed,
-        /// user-chosen port other apps on the device point at. `0` (OS-assigned
-        /// ephemeral) is only a pre-session fallback.
-        var socksPort: UInt16
+        /// Loopback SOCKS5 port for browser mode. `nil` means a forwarding-only
+        /// session with no SOCKS5 listener; `0` requests an ephemeral port.
+        var socksPort: UInt16?
         var relayURLs: [String]
     }
 
@@ -263,10 +265,7 @@ final class ProxyController: ObservableObject {
         let configDict: [String: Any] = [
             "server_node_id": s.serverNodeID,
             "auth_token": s.authToken,
-            // A fixed loopback port: a per-session random port in browser mode, the
-            // user's chosen port in proxy-only mode. The core returns the actual
-            // bound port below.
-            "socks_port": Int(s.socksPort),
+            "socks_port": s.socksPort.map { Int($0) } ?? NSNull(),
             "relay_urls": s.relayURLs,
             "dns_server": NSNull(),
         ]
@@ -292,9 +291,19 @@ final class ProxyController: ObservableObject {
 
         guard
             let resultData = resultStr.data(using: .utf8),
-            let obj = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any],
-            let port = obj["socks_port"] as? Int, (1...65535).contains(port)
+            let obj = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any]
         else {
+            flextunnel_stop(handle)
+            self.handle = nil
+            fail("bad result JSON: \(resultStr)")
+            return
+        }
+        let port: UInt16?
+        if let value = obj["socks_port"] as? Int, (1...65535).contains(value) {
+            port = UInt16(value)
+        } else if obj["socks_port"] is NSNull {
+            port = nil
+        } else {
             flextunnel_stop(handle)
             self.handle = nil
             fail("bad result JSON: \(resultStr)")
@@ -305,10 +314,11 @@ final class ProxyController: ObservableObject {
             serverNodeID: s.serverNodeID,
             relayURLs: s.relayURLs,
             dnsServer: nil)
-        socksPort = UInt16(port)
+        socksPort = port
+        forwardingSessionID = UUID()
         // Not usable yet: the handle only means the listener bound and the connect
         // loop spawned. Stay in `.connecting` until the first handshake lands.
-        socksAlive = false
+        sessionAlive = false
         tunnelConnected = false
         phase = .connecting
         connectDeadline = Date().addingTimeInterval(Self.connectTimeout)
@@ -353,8 +363,9 @@ final class ProxyController: ObservableObject {
             flextunnel_stop(handle)
             self.handle = nil
         }
+        forwardingSessionID = nil
         socksPort = nil
-        socksAlive = false
+        sessionAlive = false
         tunnelConnected = false
         linkDownSince = nil
         tunnelStuck = false
@@ -404,20 +415,20 @@ final class ProxyController: ObservableObject {
         }
 
         // health == 0 means the serve loop ended. Before the first connect that's
-        // a fatal initial failure; after, the whole proxy died (rare — the core
+        // a fatal initial failure; after, the whole native session died (rare — the core
         // keeps the loop alive and retries the tunnel across drops).
         if flextunnel_health(handle) == 0 {
             switch phase {
             case .connecting:
                 fail("couldn't connect — check server id / auth / reachability")
             case .connected:
-                // Proxy died; keep the browser mounted but mark it unusable so the
+                // Session died; keep the browser mounted but mark it unusable so the
                 // popover can offer a manual Reconnect.
-                socksAlive = false
+                sessionAlive = false
                 tunnelConnected = false
                 linkDownSince = nil
                 tunnelStuck = false
-                status = "proxy stopped — tap Reconnect"
+                status = "session stopped — tap Reconnect"
                 stopPolling()
             case .idle, .failed:
                 break
@@ -425,8 +436,9 @@ final class ProxyController: ObservableObject {
             return
         }
 
-        socksAlive = true
+        sessionAlive = true
         refreshRoutes()
+        onForwardStatusRefresh?()
         tunnelConnected = forwardedRoutes?.connected == true
         trackLinkOutage()
 
@@ -439,9 +451,9 @@ final class ProxyController: ObservableObject {
                 fail("timed out connecting — check server id / auth / reachability")
             }
         case .connected:
-            // A tunnel-link drop is not a failure: the core keeps SOCKS5 serving
-            // (off-list still browses) and reconnects on its own. Reflect the link
-            // state; on-list targets fail per-tab until it recovers.
+            // A tunnel-link drop is not a terminal session failure: the core
+            // reconnects on its own. Browser off-list traffic still works, while
+            // server-direct forwards and on-list tabs fail until it recovers.
             if tunnelConnected {
                 status = connectedStatus
             } else if tunnelStuck {
@@ -472,7 +484,65 @@ final class ProxyController: ObservableObject {
     }
 
     private var connectedStatus: String {
-        "connected on 127.0.0.1:\(socksPort.map(String.init) ?? "?")"
+        socksPort.map { "connected on 127.0.0.1:\($0)" } ?? "connected"
+    }
+
+    struct NativeForwardStatus {
+        var state: PortForwardState
+        var active: Int
+        var lastConnectionError: String?
+    }
+
+    /// Reconcile the complete desired native forward set. Returns an error
+    /// message when the session is unavailable or the FFI rejects the config.
+    func setPortForwards(_ forwards: [PortForward]) -> String? {
+        guard let handle else { return "tunnel session is not running" }
+        let values: [[String: Any]] = forwards.map { forward in
+            [
+                "id": forward.id.uuidString,
+                "local_port": Int(forward.localPort),
+                "remote_host": forward.remoteHost,
+                "remote_port": Int(forward.remotePort),
+                "enabled": forward.enabled,
+            ]
+        }
+        guard
+            let data = try? JSONSerialization.data(withJSONObject: values),
+            let json = String(data: data, encoding: .utf8)
+        else { return "failed to encode forwards" }
+        var buf = [CChar](repeating: 0, count: 4096)
+        let result = json.withCString { cstr in
+            flextunnel_set_forwards(handle, cstr, &buf, buf.count)
+        }
+        return result == 1 ? nil : String(cString: buf)
+    }
+
+    /// Read the core-owned direct-forward listener states.
+    func portForwardStatuses() -> [UUID: NativeForwardStatus]? {
+        guard let handle else { return nil }
+        var buf = [CChar](repeating: 0, count: 64 * 1024)
+        guard flextunnel_forward_statuses(handle, &buf, buf.count) == 1,
+              let data = String(cString: buf).data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = root["forwards"] as? [[String: Any]] else { return nil }
+        var statuses: [UUID: NativeForwardStatus] = [:]
+        for entry in entries {
+            guard let idText = entry["id"] as? String, let id = UUID(uuidString: idText) else {
+                continue
+            }
+            let state: PortForwardState
+            switch entry["state"] as? String {
+            case "starting": state = .starting
+            case "listening": state = .listening
+            case "failed": state = .failed(entry["error"] as? String ?? "listener failed")
+            default: state = .stopped
+            }
+            statuses[id] = NativeForwardStatus(
+                state: state,
+                active: entry["active"] as? Int ?? 0,
+                lastConnectionError: entry["last_conn_error"] as? String)
+        }
+        return statuses
     }
 
     /// Poll the core for the tunnel set learned during the handshake. It rides the

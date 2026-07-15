@@ -1,16 +1,14 @@
 import Foundation
 
-/// A local TCP port forward: connections accepted on 127.0.0.1:`localPort` are
-/// relayed to `remoteHost:remotePort` through the in-app SOCKS5 listener, so the
-/// core applies the same split-tunnel routing as the browser (on-list targets go
-/// through the tunnel, off-list targets are dialed directly).
+/// A local TCP port forward: connections accepted on loopback are relayed to
+/// `remoteHost:remotePort` over a server-direct QUIC stream. The server rejects
+/// targets outside its routed-set whitelist.
 struct PortForward: Identifiable, Codable, Equatable {
     let id: UUID
     /// Optional display name; empty shows the target instead.
     var label: String
     var localPort: UInt16
-    /// Hostname or IP literal. Kept a string end-to-end so hostnames reach the
-    /// SOCKS proxy unresolved and DNS happens on the flextunnel server.
+    /// Hostname or IP literal. Kept a string end-to-end for server-side DNS.
     var remoteHost: String
     var remotePort: UInt16
     /// Runtime-only by design: the start/stop toggle is per-session, so it is

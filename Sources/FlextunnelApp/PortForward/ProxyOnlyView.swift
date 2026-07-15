@@ -1,9 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// Full-screen proxy-only session: tunnel status, the bound SOCKS endpoint, and
-/// the managed port forwards — no browser. Other apps on the device reach the
-/// forwards (and the SOCKS proxy itself) at 127.0.0.1 while this app is alive;
+/// Full-screen forwarding-only session: tunnel status and server-direct local
+/// forwards, with no browser and no SOCKS5 listener. Other apps on the device
+/// reach the configured forwards at localhost while this app is alive;
 /// the location keep-alive (see `BackgroundKeepAlive`) holds the session in the
 /// background, falling back to best-effort (~30s before suspension) when
 /// location permission is denied.
@@ -28,7 +28,7 @@ struct ProxyOnlyView: View {
                     // Offered whenever the link is down, not just when the proxy
                     // died: if the core's own reconnect is stuck this is the only
                     // way out — it relaunches the session.
-                    if !proxy.socksAlive || !proxy.tunnelConnected {
+                    if !proxy.sessionAlive || !proxy.tunnelConnected {
                         Button {
                             proxy.retryNow()
                         } label: {
@@ -36,11 +36,11 @@ struct ProxyOnlyView: View {
                         }
                     }
                     Button(role: .destructive, action: onStop) {
-                        Label("Stop Proxy", systemImage: "stop.circle")
+                        Label("Stop Forwarding", systemImage: "stop.circle")
                     }
                 }
             }
-            .navigationTitle("Proxy")
+            .navigationTitle("Port Forwarding")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -55,7 +55,6 @@ struct ProxyOnlyView: View {
             .sheet(item: $editingDraft) { draft in
                 ForwardEditSheet(
                     draft: draft,
-                    socksPort: proxy.socksPort,
                     isLocalPortTaken: { store.isLocalPortTaken($0, excluding: draft.existingID) },
                     onSave: { forward in
                         if draft.existingID != nil {
@@ -82,18 +81,15 @@ struct ProxyOnlyView: View {
                     .font(.headline)
                     .foregroundStyle(healthColor)
                 Spacer()
-                if proxy.socksAlive && !proxy.tunnelConnected && !proxy.tunnelStuck {
+                if proxy.sessionAlive && !proxy.tunnelConnected && !proxy.tunnelStuck {
                     ProgressView()
                 }
             }
 
             InfoRow("State", proxy.status)
-            InfoRow("SOCKS proxy", proxy.socksAlive ? "running" : "stopped",
-                    valueColor: proxy.socksAlive ? .green : .red)
+            InfoRow("Forward engine", proxy.sessionAlive ? "running" : "stopped",
+                    valueColor: proxy.sessionAlive ? .green : .red)
             InfoRow("Tunnel link", tunnelLinkText, valueColor: healthColor)
-            if let port = proxy.socksPort {
-                InfoRow("Bound SOCKS", "127.0.0.1:\(port)", monospace: true)
-            }
             if let summary = proxy.connectionSummary {
                 InfoRow("Server node id", summary.serverNodeID, monospace: true)
                 InfoRow("Relay URLs", summary.relayURLs.isEmpty
@@ -120,10 +116,10 @@ struct ProxyOnlyView: View {
                 InfoRow("Last error", error, valueColor: .red)
             }
 
-            if proxy.socksAlive && !proxy.tunnelConnected {
+            if proxy.sessionAlive && !proxy.tunnelConnected {
                 Text(proxy.tunnelStuck
-                    ? "The tunnel hasn't reconnected on its own — Reconnect relaunches the session. Direct forwards keep working; tunneled forwards are unavailable."
-                    : "Direct forwards keep working; tunneled forwards are unavailable until the link recovers.")
+                    ? "The tunnel hasn't reconnected on its own — Reconnect relaunches the session. Port forwards are unavailable."
+                    : "Port forwards are unavailable until the tunnel link recovers.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -242,14 +238,14 @@ struct ProxyOnlyView: View {
 
     private var tunnelLinkText: String {
         if proxy.tunnelConnected { return "connected" }
-        if !proxy.socksAlive { return "down" }
+        if !proxy.sessionAlive { return "down" }
         return proxy.tunnelStuck ? "disconnected" : "reconnecting"
     }
 
     private var healthTitle: String {
         if proxy.tunnelConnected { return "Tunnel connected" }
         if proxy.tunnelStuck { return "Tunnel disconnected" }
-        if proxy.socksAlive { return "Tunnel reconnecting" }
+        if proxy.sessionAlive { return "Tunnel reconnecting" }
         return "Tunnel unavailable"
     }
 
@@ -261,7 +257,7 @@ struct ProxyOnlyView: View {
     private var healthColor: Color {
         if proxy.tunnelConnected { return .green }
         if proxy.tunnelStuck { return .red }
-        if proxy.socksAlive { return .orange }
+        if proxy.sessionAlive { return .orange }
         return .red
     }
 }
@@ -299,25 +295,34 @@ private struct ForwardRow: View {
     @ViewBuilder
     private var routeBadge: some View {
         if forward.enabled, let routes {
-            let tunneled = RouteMatch.isTunneled(host: forward.remoteHost, routes: routes)
-            Text(tunneled ? "tunneled" : "direct")
+            let allowed = RouteMatch.isTunneled(host: forward.remoteHost, routes: routes)
+            Text(allowed ? "server-direct" : "not routed")
                 .font(.caption2.weight(.semibold))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
-                .background(tunneled ? Color.green.opacity(0.15) : Color.orange.opacity(0.15), in: Capsule())
-                .foregroundStyle(tunneled ? .green : .orange)
+                .background(allowed ? Color.green.opacity(0.15) : Color.orange.opacity(0.15), in: Capsule())
+                .foregroundStyle(allowed ? .green : .orange)
         }
     }
 
     @ViewBuilder
     private var statusLine: some View {
         switch status.state {
-        case .listening:
-            Text(status.connectionCount > 0
-                 ? "listening · \(status.connectionCount) active"
-                 : "listening")
+        case .starting:
+            Text("starting…")
                 .font(.caption)
-                .foregroundStyle(.green)
+                .foregroundStyle(.orange)
+        case .listening:
+            VStack(alignment: .leading, spacing: 2) {
+                Text(status.connectionCount > 0
+                     ? "listening · \(status.connectionCount) active"
+                     : "listening")
+                    .foregroundStyle(.green)
+                if let error = status.lastConnectionError {
+                    Text(error).foregroundStyle(.orange)
+                }
+            }
+            .font(.caption)
         case .failed(let reason):
             Text(reason)
                 .font(.caption)
@@ -356,7 +361,6 @@ private struct ForwardDraft: Identifiable {
 
 private struct ForwardEditSheet: View {
     @State var draft: ForwardDraft
-    let socksPort: UInt16?
     let isLocalPortTaken: (UInt16) -> Bool
     let onSave: (PortForward) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -378,7 +382,7 @@ private struct ForwardEditSheet: View {
                     }
                 }
                 Section("Remote target") {
-                    TextField("Host or IP (resolved through tunnel)", text: $draft.remoteHost)
+                    TextField("Host or IP (resolved by server)", text: $draft.remoteHost)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
@@ -435,7 +439,6 @@ private struct ForwardEditSheet: View {
         guard let localPort = parsedLocalPort,
               let remotePort = parsedRemotePort,
               !trimmedHost.isEmpty,
-              localPort != socksPort,
               !isLocalPortTaken(localPort) else { return nil }
         return PortForward(
             id: draft.existingID ?? UUID(),
@@ -454,9 +457,6 @@ private struct ForwardEditSheet: View {
             return "Local port must be 1–65535."
         }
         if let localPort = parsedLocalPort {
-            if localPort == socksPort {
-                return "Port \(localPort) is the SOCKS proxy port."
-            }
             if isLocalPortTaken(localPort) {
                 return "Another forward already uses local port \(localPort)."
             }

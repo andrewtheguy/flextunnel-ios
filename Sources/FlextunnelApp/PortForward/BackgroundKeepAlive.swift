@@ -3,8 +3,8 @@ import Foundation
 
 /// Location-based background keep-alive for the port-forwarding session — the
 /// same technique Termius and Blink use: while a continuous Core Location
-/// session is running, iOS does not suspend the app, so the SOCKS listener and
-/// port forwards stay reachable from other apps indefinitely instead of dying
+/// session is running, iOS does not suspend the app, so the server-direct port
+/// forwards stay reachable from other apps indefinitely instead of dying
 /// ~30s after backgrounding.
 ///
 /// Runs while a proxy-only session is up (`setSessionActive`) and the persisted
@@ -12,7 +12,7 @@ import Foundation
 /// The accuracy is deliberately coarse (100 km, like Blink's `geo track`) so
 /// fixes come from cell towers rather than the GPS radio, and every fix is
 /// discarded — the session exists only to keep the process alive, and it stops
-/// with the proxy so the location indicator never outlives it.
+/// with the session so the location indicator never outlives it.
 @MainActor
 final class BackgroundKeepAlive: NSObject, ObservableObject {
     /// The persisted "Keep alive in background" preference; off by default, so

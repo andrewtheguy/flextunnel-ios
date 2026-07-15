@@ -1046,7 +1046,7 @@ private struct TunnelStatusPopover: View {
     /// The SOCKS proxy is up but the tunnel link is (re)establishing. Browsing may
     /// still work (off-list) while this is true; the core reconnects on its own.
     private var isReconnecting: Bool {
-        proxy.socksAlive && !proxy.tunnelConnected
+        proxy.sessionAlive && !proxy.tunnelConnected
     }
 
     /// Drives the on-demand connection-path snapshot sheet.
@@ -1074,14 +1074,14 @@ private struct TunnelStatusPopover: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     DetailRow("State", proxy.status)
-                    DetailRow("SOCKS proxy", proxy.socksAlive ? "running" : "stopped",
-                              valueColor: proxy.socksAlive ? .green : .red)
+                    DetailRow("SOCKS proxy", proxy.sessionAlive ? "running" : "stopped",
+                              valueColor: proxy.sessionAlive ? .green : .red)
                     DetailRow("Tunnel link", tunnelLinkText, valueColor: healthColor)
                     // Where the browser sends tunnel-set hosts. Off-list hosts
                     // never touch it (WebKit's matchDomains split happens before
                     // any connection), so while nothing is listening only
                     // tunnel-set hosts fail.
-                    if proxy.socksAlive {
+                    if proxy.sessionAlive {
                         DetailRow("Bound SOCKS", "127.0.0.1:\(proxy.socksPort ?? boundPort)")
                     } else {
                         DetailRow(
@@ -1148,7 +1148,7 @@ private struct TunnelStatusPopover: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
-                } else if !proxy.socksAlive {
+                } else if !proxy.sessionAlive {
                     Button(action: onReconnect) {
                         Label("Reconnect", systemImage: "arrow.clockwise")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1218,14 +1218,14 @@ private struct TunnelStatusPopover: View {
 
     private var tunnelLinkText: String {
         if proxy.tunnelConnected { return "connected" }
-        if !proxy.socksAlive { return "down" }
+        if !proxy.sessionAlive { return "down" }
         return proxy.tunnelStuck ? "disconnected" : "reconnecting"
     }
 
     private var healthTitle: String {
         if proxy.tunnelConnected { return "Tunnel connected" }
         if proxy.tunnelStuck { return "Tunnel disconnected" }
-        if proxy.socksAlive { return "Tunnel reconnecting" }
+        if proxy.sessionAlive { return "Tunnel reconnecting" }
         return "Proxy stopped"
     }
 
@@ -1237,7 +1237,7 @@ private struct TunnelStatusPopover: View {
     private var healthColor: Color {
         if proxy.tunnelConnected { return .green }
         if proxy.tunnelStuck { return .red }
-        if proxy.socksAlive { return .orange }
+        if proxy.sessionAlive { return .orange }
         return .red
     }
 
