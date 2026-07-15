@@ -123,7 +123,7 @@ final class PortForwardController: ObservableObject {
     // MARK: - Native manager
 
     private func applyDesired() {
-        guard let proxy, sessionID != nil else { return }
+        guard let proxy, proxy.sessionAlive, sessionID != nil else { return }
         if let error = proxy.setPortForwards(forwards) {
             for forward in forwards where forward.enabled {
                 runtime[forward.id] = RuntimeStatus(state: .failed(error))
@@ -134,7 +134,7 @@ final class PortForwardController: ObservableObject {
     }
 
     func refreshRuntime() {
-        guard let proxy, sessionID != nil,
+        guard let proxy, proxy.sessionAlive, sessionID != nil,
               let statuses = proxy.portForwardStatuses() else { return }
 
         var next = forwards.reduce(into: [UUID: RuntimeStatus]()) { result, forward in

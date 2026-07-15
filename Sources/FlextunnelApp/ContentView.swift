@@ -208,6 +208,7 @@ struct ContentView: View {
             }
             .onChange(of: proxy.sessionAlive) {
                 syncForwards()
+                syncKeepAlive()
                 syncLiveActivity()
             }
             .onChange(of: proxy.tunnelConnected) { syncLiveActivity() }
