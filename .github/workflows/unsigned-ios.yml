@@ -1,0 +1,148 @@
+name: Build unsigned iOS artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build unsigned IPA and archive
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build unsigned device archive
+        run: |
+          xcodebuild archive \
+            -project Flextunnel.xcodeproj \
+            -scheme FlextunnelApp \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/flextunnel-ios-unsigned.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            DEVELOPMENT_TEAM=
+
+      - name: Package and verify unsigned artifacts
+        run: |
+          archive_path="$RUNNER_TEMP/flextunnel-ios-unsigned.xcarchive"
+          artifact_dir="$RUNNER_TEMP/flextunnel-ios-artifacts"
+          app_path="$archive_path/Products/Applications/Flextunnel.app"
+          widget_path="$app_path/PlugIns/FlextunnelWidgets.appex"
+          package_root="$RUNNER_TEMP/flextunnel-ipa"
+
+          if [[ ! -d "$app_path" ]]; then
+            echo "::error::Archived app not found at $app_path"
+            exit 1
+          fi
+
+          if [[ ! -d "$widget_path" ]]; then
+            echo "::error::Widget extension not found at $widget_path"
+            exit 1
+          fi
+
+          while IFS= read -r bundle; do
+            if codesign --display "$bundle" >/dev/null 2>&1; then
+              echo "::error::$bundle unexpectedly has a code signature"
+              exit 1
+            fi
+          done < <(
+            find "$app_path" -type d \
+              \( -name "*.app" -o -name "*.appex" -o -name "*.framework" \) \
+              -print
+          )
+
+          if find "$app_path" -name embedded.mobileprovision -print -quit \
+            | grep -q .; then
+            echo "::error::The archived app unexpectedly embeds a profile"
+            exit 1
+          fi
+
+          if [[ "$(plutil -extract UIBackgroundModes.0 raw -o - \
+            "$app_path/Info.plist")" != "location" ]]; then
+            echo "::error::The archived app lost its background location mode"
+            exit 1
+          fi
+
+          if [[ -z "$(plutil -extract NSLocationWhenInUseUsageDescription raw \
+            -o - "$app_path/Info.plist")" ]]; then
+            echo "::error::The archived app lost its location usage description"
+            exit 1
+          fi
+
+          if [[ "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw \
+            -o - "$widget_path/Info.plist")" != \
+            "com.apple.widgetkit-extension" ]]; then
+            echo "::error::The embedded extension is not a WidgetKit extension"
+            exit 1
+          fi
+
+          mkdir -p "$artifact_dir" "$package_root/Payload"
+          ditto --norsrc --noextattr --noqtn --noacl \
+            "$app_path" \
+            "$package_root/Payload/Flextunnel.app"
+          ditto -c -k --keepParent \
+            --norsrc --noextattr --noqtn --noacl \
+            "$package_root/Payload" \
+            "$artifact_dir/flextunnel-unsigned.ipa"
+          ditto -c -k --keepParent \
+            --norsrc --noextattr --noqtn --noacl \
+            "$archive_path" \
+            "$artifact_dir/flextunnel-ios-unsigned.xcarchive.zip"
+
+          unzip -tq "$artifact_dir/flextunnel-unsigned.ipa"
+          unzip -tq "$artifact_dir/flextunnel-ios-unsigned.xcarchive.zip"
+
+          if unzip -Z1 "$artifact_dir/flextunnel-unsigned.ipa" \
+            | grep -Eq '(^|/)(__MACOSX|\._)'; then
+            echo "::error::The IPA contains unexpected macOS metadata"
+            exit 1
+          fi
+
+          (
+            cd "$artifact_dir"
+            shasum -a 256 \
+              flextunnel-unsigned.ipa \
+              flextunnel-ios-unsigned.xcarchive.zip \
+              > SHA256SUMS.txt
+          )
+
+      - name: Upload unsigned IPA and archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: flextunnel-ios-unsigned-${{ github.run_number }}
+          path: ${{ runner.temp }}/flextunnel-ios-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact_dir="$RUNNER_TEMP/flextunnel-ios-artifacts"
+          release_id="$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA:0:7}"
+
+          gh release create "$release_id" \
+            "$artifact_dir/flextunnel-unsigned.ipa" \
+            "$artifact_dir/flextunnel-ios-unsigned.xcarchive.zip" \
+            "$artifact_dir/SHA256SUMS.txt" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$release_id" \
+            --notes "Unsigned iOS artifacts built from commit $GITHUB_SHA." \
+            --prerelease \
+            --latest=false

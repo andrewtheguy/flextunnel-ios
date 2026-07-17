@@ -39,6 +39,9 @@ There are two ways to use the tunnel, chosen on the setup screen:
   what forwards are good for, and troubleshooting.
 - [Local FFI development](docs/local-ffi-development.md) — building against a
   local `../flextunnel` Rust checkout instead of the pinned release.
+- [Sign an unsigned IPA](docs/signing-unsigned-ipa.md) — verify a prerelease,
+  apply team-owned bundle IDs, sign the widget and app with separate profiles,
+  and preserve the background location configuration.
 
 ## Prerequisites
 
@@ -110,6 +113,19 @@ from `Developer.local.xcconfig` (gitignored, per-developer) or a `--team-id` fla
    `--allow-provisioning-updates` to let Xcode create/update signing assets.
    See `scripts/create-archive-ios.sh --help` for all options (configuration,
    output paths, and export method, which defaults to `debugging`).
+
+## Unsigned prerelease for self-signing
+
+Run the **Build unsigned iOS artifacts** workflow manually in GitHub Actions.
+It builds without a development team, uploads the unsigned IPA, unsigned
+`.xcarchive`, and checksums as a workflow artifact, and publishes the same files
+in a prerelease named `yyyymmddhhmmss-<short-git-hash>`.
+
+The IPA cannot be installed as downloaded. Each user must sign both the main
+app and its WidgetKit extension with separate profiles owned by their Apple
+developer team. See [Sign the unsigned iOS IPA](docs/signing-unsigned-ipa.md)
+for the complete process. The workflow also verifies that the unsigned build
+still contains the app's background location mode and usage description.
 
 ## Notes
 
