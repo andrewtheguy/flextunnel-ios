@@ -10,7 +10,7 @@ import os
 @MainActor
 final class LiveActivityController {
     private var activity: Activity<TunnelActivityAttributes>?
-    private let log = Logger(subsystem: "com.andrewtheguy.flextunnel", category: "LiveActivity")
+    private let log = Logger(subsystem: "dev.flexaccess.flextunnel", category: "LiveActivity")
 
     /// Reattach to a Live Activity that outlived a previous run (Live Activities
     /// survive force-quit/relaunch). Without this the fresh `nil` reference would

@@ -9,7 +9,7 @@
 #   scripts/bump-xcframework.sh            # defaults to the latest release tag
 set -euo pipefail
 
-REPO="andrewtheguy/flextunnel"
+REPO="flexaccessdev/flextunnel"
 ASSET="libflextunnel-ios.xcframework.zip"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="$SCRIPT_DIR/../Packages/Flextunnel/Package.swift"

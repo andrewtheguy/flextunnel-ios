@@ -18,7 +18,7 @@ set -euo pipefail
 APP_NAME="flextunnel"
 PROJECT_NAME="Flextunnel"
 SCHEME="FlextunnelApp"
-BUNDLE_ID="com.andrewtheguy.flextunnel"
+BUNDLE_ID="dev.flexaccess.flextunnel"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
