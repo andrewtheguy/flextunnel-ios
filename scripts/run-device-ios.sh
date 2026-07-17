@@ -18,6 +18,9 @@ set -euo pipefail
 APP_NAME="flextunnel"
 PROJECT_NAME="Flextunnel"
 SCHEME="FlextunnelApp"
+# The built product (.app) is named by PRODUCT_NAME, which is intentionally
+# distinct from the target/scheme name (FlextunnelApp) — see project.yml.
+PRODUCT_NAME="Flextunnel"
 BUNDLE_ID="dev.flexaccess.flextunnel"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -144,7 +147,7 @@ fi
   die "${PROJECT_NAME}.xcodeproj not found — drop --no-generate or run 'xcodegen generate'"
 
 DERIVED_DATA="$PROJECT_ROOT/build/DerivedData"
-APP_PATH="$DERIVED_DATA/Build/Products/${CONFIGURATION}-iphoneos/${SCHEME}.app"
+APP_PATH="$DERIVED_DATA/Build/Products/${CONFIGURATION}-iphoneos/${PRODUCT_NAME}.app"
 
 provisioning_args=()
 [[ "$ALLOW_PROVISIONING_UPDATES" == "1" ]] && provisioning_args=(-allowProvisioningUpdates)
