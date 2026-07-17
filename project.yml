@@ -87,6 +87,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.flexaccess.flextunnel
+        # User-facing app name (home-screen label + Flextunnel.app product), kept
+        # distinct from the target/scheme name (FlextunnelApp) so the build command
+        # and shared scheme are unaffected.
+        PRODUCT_NAME: Flextunnel
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: Sources/FlextunnelApp/FlextunnelApp.entitlements
         # Explicit Info.plist so we can carry an App Transport Security exception
