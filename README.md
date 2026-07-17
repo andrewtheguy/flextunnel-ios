@@ -3,7 +3,7 @@
 An iOS app for reaching **private resources** — hosts on your server's network
 by **hostname** (including names that only resolve via the server's DNS),
 the server's own `localhost`, or hosts by **IP** — without a VPN. It's the iOS
-client for [flextunnel](https://github.com/andrewtheguy/flextunnel), a SOCKS5-over-QUIC proxy where the
+client for [flextunnel](https://github.com/flexaccessdev/flextunnel), a SOCKS5-over-QUIC proxy where the
 **server** makes the outbound TCP connection from its own network, resolving DNS
 server-side when the target is a hostname. Because the transport is [iroh](https://www.iroh.computer/)
 QUIC (NAT traversal, relay fallback, TLS 1.3), the app dials the server by its
