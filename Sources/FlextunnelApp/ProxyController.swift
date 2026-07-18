@@ -115,7 +115,6 @@ final class ProxyController: ObservableObject {
     struct ConnectionSummary {
         var serverNodeID: String
         var relayURLs: [String]
-        var dnsServer: String?
     }
 
     /// The tunnel set as reported by the core: the domains/CIDRs routed through
@@ -267,7 +266,6 @@ final class ProxyController: ObservableObject {
             "auth_token": s.authToken,
             "socks_port": s.socksPort.map { Int($0) } ?? NSNull(),
             "relay_urls": s.relayURLs,
-            "dns_server": NSNull(),
         ]
         guard
             let data = try? JSONSerialization.data(withJSONObject: configDict),
@@ -312,8 +310,7 @@ final class ProxyController: ObservableObject {
 
         connectionSummary = ConnectionSummary(
             serverNodeID: s.serverNodeID,
-            relayURLs: s.relayURLs,
-            dnsServer: nil)
+            relayURLs: s.relayURLs)
         socksPort = port
         forwardingSessionID = UUID()
         // Not usable yet: the handle only means the listener bound and the connect
