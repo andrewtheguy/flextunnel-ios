@@ -110,6 +110,9 @@ final class ProxyController: ObservableObject {
         /// session with no SOCKS5 listener; `0` requests an ephemeral port.
         var socksPort: UInt16?
         var relayURLs: [String]
+        /// Shared bearer token sent to every custom relay's WebSocket upgrade.
+        /// Empty means none; only valid with custom `relayURLs`.
+        var relayAuthToken: String
     }
 
     struct ConnectionSummary {
@@ -199,6 +202,26 @@ final class ProxyController: ObservableObject {
         }
     }
 
+    /// Health of one configured custom relay, from the on-demand `/healthz`
+    /// probe the core runs when a snapshot is requested. `working` is `true` on a
+    /// 2xx, `false` when unreachable/timed-out/non-2xx, and `nil` if the check
+    /// could not run. `/healthz` is unauthenticated: it confirms the relay is up,
+    /// not that a relay auth token is accepted.
+    struct CustomRelay: Identifiable {
+        let url: String
+        var working: Bool?
+        var error: String?
+
+        var id: String { url }
+    }
+
+    /// One on-demand connection snapshot: the live iroh path(s) plus custom-relay
+    /// health. Empty on both counts while the tunnel link is down.
+    struct ConnectionSnapshot {
+        var paths: [ConnPath] = []
+        var customRelays: [CustomRelay] = []
+    }
+
     /// A reverse-routing (agent) alias plus the backing agent's live connection
     /// status as the core reports it: `connected`, `disconnected`, or `unknown`
     /// (the last when the tunnel is down or the heartbeat-fed view is stale).
@@ -261,11 +284,13 @@ final class ProxyController: ObservableObject {
         lastError = nil
         teardownHandle() // tear down any previous handle first
 
+        let relayAuthToken = s.relayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
         let configDict: [String: Any] = [
             "server_node_id": s.serverNodeID,
             "auth_token": s.authToken,
             "socks_port": s.socksPort.map { Int($0) } ?? NSNull(),
             "relay_urls": s.relayURLs,
+            "relay_auth_token": relayAuthToken.isEmpty ? NSNull() : relayAuthToken,
         ]
         guard
             let data = try? JSONSerialization.data(withJSONObject: configDict),
@@ -596,16 +621,17 @@ final class ProxyController: ObservableObject {
     /// readout (relay/direct) for the "connection path" status sheet, mirroring
     /// the desktop CTA. Empty while the tunnel link is down (the core routes over
     /// no path then), so callers only offer it while `tunnelConnected`.
-    func queryConnPath() -> [ConnPath] {
-        guard let handle else { return [] }
+    func queryConnPath() -> ConnectionSnapshot {
+        guard let handle else { return ConnectionSnapshot() }
         var buf = [CChar](repeating: 0, count: 8 * 1024)
-        guard flextunnel_conn_path(handle, &buf, buf.count) == 1 else { return [] }
+        guard flextunnel_conn_path(handle, &buf, buf.count) == 1 else { return ConnectionSnapshot() }
         guard
             let data = String(cString: buf).data(using: .utf8),
-            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let paths = obj["paths"] as? [[String: Any]]
-        else { return [] }
-        return paths.enumerated().compactMap { index, entry in
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return ConnectionSnapshot() }
+
+        let paths = (obj["paths"] as? [[String: Any]] ?? []).enumerated().compactMap {
+            index, entry -> ConnPath? in
             guard let display = entry["display"] as? String else { return nil }
             return ConnPath(
                 id: index,
@@ -613,6 +639,16 @@ final class ProxyController: ObservableObject {
                 display: display,
                 selected: entry["selected"] as? Bool ?? false)
         }
+        let customRelays = (obj["custom_relays"] as? [[String: Any]] ?? []).compactMap {
+            entry -> CustomRelay? in
+            guard let url = entry["url"] as? String else { return nil }
+            // `working` is a JSON bool or null; `NSNull`/absent both map to nil.
+            return CustomRelay(
+                url: url,
+                working: entry["working"] as? Bool,
+                error: entry["error"] as? String)
+        }
+        return ConnectionSnapshot(paths: paths, customRelays: customRelays)
     }
 
     deinit {
