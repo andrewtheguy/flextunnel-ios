@@ -59,6 +59,7 @@ struct ContentView: View {
     @AppStorage("lastServerNodeID") private var serverNodeID = ""
     @State private var authToken = ""
     @State private var relayURLs = ""
+    @State private var relayAuthToken = ""
     // Browser mode's loopback SOCKS5 port. Forwarding-only mode has no SOCKS5
     // listener. This is picked at random (private/dynamic range) once per session and
     // held until the session exits, so it stays stable across the core's own
@@ -112,6 +113,10 @@ struct ContentView: View {
                     }
                     LabeledField("Relay URLs", hint: "comma-separated, optional") {
                         TextField("", text: $relayURLs)
+                            .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    }
+                    LabeledField("Relay auth token", hint: "optional, custom relays only") {
+                        SecureField("", text: $relayAuthToken)
                             .autocorrectionDisabled().textInputAutocapitalization(.never)
                     }
                 }
@@ -308,7 +313,8 @@ struct ContentView: View {
             // Forwarding-only sessions have no SOCKS listener. Browser mode's
             // random port is held across reconnects.
             socksPort: sessionMode == .browser ? (browserSessionPort ?? 0) : nil,
-            relayURLs: splitCSV(relayURLs)
+            relayURLs: splitCSV(relayURLs),
+            relayAuthToken: relayAuthToken
         )
     }
 
