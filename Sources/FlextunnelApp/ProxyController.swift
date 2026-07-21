@@ -101,6 +101,9 @@ final class ProxyController: ObservableObject {
     private static let reconnectGrace: TimeInterval = 30
     /// Last settings that drove a launch, replayed by the manual Reconnect.
     private var lastSettings: Settings?
+    /// Bumped on every start and teardown so an in-flight async start whose FFI
+    /// finishes after a newer start/stop is discarded instead of clobbering state.
+    private var startEpoch = 0
 
     /// Connection parameters entered in the UI.
     struct Settings {
@@ -277,12 +280,56 @@ final class ProxyController: ObservableObject {
         flextunnel_init_logging()
     }
 
+    /// Raw result of the blocking start FFI, handed back to the main actor.
+    /// `@unchecked Sendable`: the `OpaquePointer` is produced on the background
+    /// executor and only ever read on the main actor after the hop, never shared.
+    private struct StartResult: @unchecked Sendable {
+        let handle: OpaquePointer?
+        let message: String
+    }
+
+    /// Runs the blocking FFI off the main actor: tears down any previous handle,
+    /// then creates the iroh endpoint and binds the SOCKS listener. This is the
+    /// slow work (endpoint create + socket bind) that must not run on the UI thread.
+    nonisolated private static func runStartFFI(config: String, previous: OpaquePointer?) -> StartResult {
+        if let previous { flextunnel_stop(previous) }
+        var buf = [CChar](repeating: 0, count: 1024)
+        let handle = config.withCString { cstr in
+            flextunnel_start(cstr, &buf, buf.count)
+        }
+        return StartResult(handle: handle, message: String(cString: buf))
+    }
+
     /// User-initiated start (also the manual Reconnect target). Builds the FFI
     /// config, starts the proxy, and publishes the bound port.
+    ///
+    /// The connecting state is published immediately, then the blocking
+    /// `flextunnel_start` (and any previous handle's teardown) runs off the main
+    /// thread so the UI shows the spinner instead of freezing on the tap.
     func start(_ s: Settings) {
         lastSettings = s
         lastError = nil
-        teardownHandle() // tear down any previous handle first
+
+        // Reflect the connecting state and drop the previous session's published
+        // state now, synchronously, so the UI updates before the blocking FFI.
+        // The previous handle is stopped on the background executor alongside the
+        // new start; a bumped epoch discards any in-flight start we're superseding.
+        startEpoch &+= 1
+        let epoch = startEpoch
+        let previousHandle = handle
+        handle = nil
+        stopPolling()
+        forwardingSessionID = nil
+        socksPort = nil
+        sessionAlive = false
+        tunnelConnected = false
+        linkDownSince = nil
+        tunnelStuck = false
+        connectionSummary = nil
+        forwardedRoutes = nil
+        phase = .connecting
+        connectDeadline = Date().addingTimeInterval(Self.connectTimeout)
+        status = "connecting to server…"
 
         let relayAuthToken = s.relayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
         let configDict: [String: Any] = [
@@ -296,29 +343,37 @@ final class ProxyController: ObservableObject {
             let data = try? JSONSerialization.data(withJSONObject: configDict),
             let configStr = String(data: data, encoding: .utf8)
         else {
+            if let previousHandle { Task.detached { flextunnel_stop(previousHandle) } }
             fail("failed to encode config JSON")
             return
         }
 
-        var buf = [CChar](repeating: 0, count: 1024)
-        let handle = configStr.withCString { cstr in
-            flextunnel_start(cstr, &buf, buf.count)
+        Task.detached(priority: .userInitiated) {
+            let result = Self.runStartFFI(config: configStr, previous: previousHandle)
+            await self.finishStart(result, settings: s, epoch: epoch)
         }
-        let resultStr = String(cString: buf)
+    }
 
-        guard let handle else {
-            fail("start failed: \(resultStr)")
+    /// Publishes the outcome of `runStartFFI` back on the main actor.
+    private func finishStart(_ result: StartResult, settings s: Settings, epoch: Int) {
+        // A newer start()/teardown superseded this launch: discard it, and stop
+        // the freshly bound handle off-main so it doesn't leak a live session.
+        guard epoch == startEpoch else {
+            if let stale = result.handle { Task.detached { flextunnel_stop(stale) } }
             return
         }
-        self.handle = handle
+
+        guard let handle = result.handle else {
+            fail("start failed: \(result.message)")
+            return
+        }
 
         guard
-            let resultData = resultStr.data(using: .utf8),
+            let resultData = result.message.data(using: .utf8),
             let obj = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any]
         else {
-            flextunnel_stop(handle)
-            self.handle = nil
-            fail("bad result JSON: \(resultStr)")
+            Task.detached { flextunnel_stop(handle) }
+            fail("bad result JSON: \(result.message)")
             return
         }
         let port: UInt16?
@@ -327,12 +382,12 @@ final class ProxyController: ObservableObject {
         } else if obj["socks_port"] is NSNull {
             port = nil
         } else {
-            flextunnel_stop(handle)
-            self.handle = nil
-            fail("bad result JSON: \(resultStr)")
+            Task.detached { flextunnel_stop(handle) }
+            fail("bad result JSON: \(result.message)")
             return
         }
 
+        self.handle = handle
         connectionSummary = ConnectionSummary(
             serverNodeID: s.serverNodeID,
             relayURLs: s.relayURLs)
@@ -340,11 +395,6 @@ final class ProxyController: ObservableObject {
         forwardingSessionID = UUID()
         // Not usable yet: the handle only means the listener bound and the connect
         // loop spawned. Stay in `.connecting` until the first handshake lands.
-        sessionAlive = false
-        tunnelConnected = false
-        phase = .connecting
-        connectDeadline = Date().addingTimeInterval(Self.connectTimeout)
-        status = "connecting to server…"
         startHealthPolling()
     }
 
@@ -379,6 +429,8 @@ final class ProxyController: ObservableObject {
 
     /// Stop the FFI handle and polling and clear per-session state.
     private func teardownHandle() {
+        // Supersede any in-flight async start so its result is discarded.
+        startEpoch &+= 1
         stopPolling()
         connectDeadline = nil
         if let handle {
