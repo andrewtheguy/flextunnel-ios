@@ -9,14 +9,19 @@ import Security
 /// unlock following a boot (so it survives backgrounding), never synced to
 /// iCloud, and never restored onto another device.
 enum TokenStore {
-    private static let service = "com.example.flextunnel.authToken"
     private static let account = "default"
 
-    /// Persist `token`, replacing any existing value. Empty strings are treated
-    /// as a clear so we never store a blank secret.
-    static func save(_ token: String) {
+    /// The proxy auth token — the primary credential.
+    static let authTokenService = "com.example.flextunnel.authToken"
+    /// The shared bearer token for custom relays — a separate secret so it
+    /// survives launches alongside the auth token (custom relays only).
+    static let relayTokenService = "com.example.flextunnel.relayAuthToken"
+
+    /// Persist `token` under `service`, replacing any existing value. Empty
+    /// strings are treated as a clear so we never store a blank secret.
+    static func save(_ token: String, service: String = authTokenService) {
         guard !token.isEmpty, let data = token.data(using: .utf8) else {
-            clear()
+            clear(service: service)
             return
         }
 
@@ -36,8 +41,8 @@ enum TokenStore {
         }
     }
 
-    /// Read back the stored token, or nil if none is set.
-    static func load() -> String? {
+    /// Read back the token stored under `service`, or nil if none is set.
+    static func load(service: String = authTokenService) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -56,8 +61,8 @@ enum TokenStore {
         return token
     }
 
-    /// Remove the stored token.
-    static func clear() {
+    /// Remove the token stored under `service`.
+    static func clear(service: String = authTokenService) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

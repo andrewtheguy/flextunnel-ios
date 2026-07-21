@@ -58,7 +58,7 @@ struct ContentView: View {
 
     @AppStorage("lastServerNodeID") private var serverNodeID = ""
     @State private var authToken = ""
-    @State private var relayURLs = ""
+    @AppStorage("lastRelayURLs") private var relayURLs = ""
     @State private var relayAuthToken = ""
     // Browser mode's loopback SOCKS5 port. Forwarding-only mode has no SOCKS5
     // listener. This is picked at random (private/dynamic range) once per session and
@@ -195,8 +195,12 @@ struct ContentView: View {
                 // typo'd credential (which starts fine but fails the handshake)
                 // never overwrites a good one. Save the token from the snapshot the
                 // connection used, not the live (still-editable) field.
-                if newPhase == .connected, let token = connectingSettings?.authToken {
-                    TokenStore.save(token)
+                if newPhase == .connected, let settings = connectingSettings {
+                    TokenStore.save(settings.authToken)
+                    // The relay token is a secret like the auth token, so it goes
+                    // to the Keychain (not @AppStorage) and only after a successful
+                    // handshake. Empty clears it (save treats "" as a clear).
+                    TokenStore.save(settings.relayAuthToken, service: TokenStore.relayTokenService)
                 }
                 syncSessionPresentation()
                 syncLiveActivity()
@@ -324,12 +328,16 @@ struct ContentView: View {
             .filter { !$0.isEmpty }
     }
 
-    /// Prefill the auth token from the Keychain on first appearance.
+    /// Prefill the Keychain-backed secrets (auth token, relay token) on first
+    /// appearance. The relay URLs are non-secret and restore via @AppStorage.
     private func loadStoredToken() {
         guard !didLoadToken else { return }
         didLoadToken = true
         if let token = TokenStore.load() {
             authToken = token
+        }
+        if let relayToken = TokenStore.load(service: TokenStore.relayTokenService) {
+            relayAuthToken = relayToken
         }
     }
 
