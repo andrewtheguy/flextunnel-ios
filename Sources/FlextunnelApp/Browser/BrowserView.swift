@@ -627,11 +627,22 @@ private struct AddressBarView: View {
                 }
             }
 
-            tunnelStatusButton
+            // While editing, offer the standard iOS-browser Cancel to back out —
+            // it resigns focus, which restores the address text and drops the
+            // suggestions/home overlay so the current page is visible again.
+            // Otherwise the tunnel status action takes the slot.
+            if addressFocused {
+                Button("Cancel") { cancelEditing() }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
+            } else {
+                tunnelStatusButton
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+        .animation(.easeInOut(duration: 0.18), value: addressFocused)
         .onChange(of: model.selectedID) { syncAddress(model.selectedTab?.addressText) }
         .onChange(of: tab?.addressText) { if !addressFocused { syncAddress(tab?.addressText) } }
         .onChange(of: addressFocused) { _, focused in
@@ -735,6 +746,13 @@ private struct AddressBarView: View {
     private func beginEditing(_ tab: BrowserTab?) {
         editText = tab?.addressText ?? editText
         addressFocused = true
+    }
+
+    /// Backs out of editing without navigating: drops focus and restores the
+    /// address text to the current page, so the overlays clear and the page shows.
+    private func cancelEditing() {
+        addressFocused = false
+        syncAddress(model.selectedTab?.addressText)
     }
 
     private func syncAddress(_ address: String?) {
