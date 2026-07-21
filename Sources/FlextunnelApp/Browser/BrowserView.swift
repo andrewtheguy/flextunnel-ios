@@ -154,9 +154,11 @@ struct BrowserView: View {
         for entry in model.library.history {
             guard let host = entry.url.host?.lowercased() else { continue }
             let bareHost = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
-            let path = entry.url.path.lowercased()
+            // Match case-insensitively, but de-dup on the case-sensitive path so
+            // distinct resources like /Account and /account stay separate.
+            let path = entry.url.path
             let isPrefix = host.hasPrefix(query) || bareHost.hasPrefix(query)
-            let isSubstring = host.contains(query) || path.contains(query)
+            let isSubstring = host.contains(query) || path.lowercased().contains(query)
                 || entry.url.absoluteString.lowercased().contains(query)
             guard isPrefix || isSubstring else { continue }
             guard seen.insert(host + path).inserted else { continue }
