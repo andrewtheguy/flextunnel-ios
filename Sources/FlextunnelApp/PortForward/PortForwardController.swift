@@ -176,8 +176,22 @@ final class PortForwardController: ObservableObject {
 
     // MARK: - Persistence
 
+    /// Serial queue for the atomic disk write, so writes stay ordered and the
+    /// file I/O never blocks the main thread — `disableAll()` persists on every
+    /// start tap, and the write carries file-protection attributes.
+    private static let ioQueue = DispatchQueue(
+        label: "dev.flexaccess.flextunnel.portforward-io", qos: .utility)
+
     private func persist() {
-        Self.save(forwards, to: fileURL)
+        // Encode on the main actor (a deterministic snapshot of current state),
+        // then hand the bytes to the serial queue to write off the main thread.
+        guard let data = try? JSONEncoder().encode(forwards) else { return }
+        let url = fileURL
+        Self.ioQueue.async {
+            try? data.write(
+                to: url,
+                options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
     }
 
     private static func defaultDirectory() -> URL {
@@ -200,12 +214,5 @@ final class PortForwardController: ObservableObject {
     private static func load<T: Decodable>(_ type: T.Type, from url: URL) -> T? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
-    }
-
-    private static func save<T: Encodable>(_ value: T, to url: URL) {
-        guard let data = try? JSONEncoder().encode(value) else { return }
-        try? data.write(
-            to: url,
-            options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 }
