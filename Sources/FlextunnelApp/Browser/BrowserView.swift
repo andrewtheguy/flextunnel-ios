@@ -15,6 +15,7 @@ struct BrowserView: View {
     @State private var showBookmarkSaved = false
     @State private var showingFind = false
     @State private var addressBarFocused = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 0) {
@@ -104,6 +105,16 @@ struct BrowserView: View {
         }
         .fullScreenCover(isPresented: $showingTabTray) {
             TabTrayView(model: model)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Backgrounding dismisses the keyboard and resigns the address bar's
+            // first responder, but SwiftUI's focus `.onChange` handlers are paused
+            // while backgrounded — so `addressBarFocused` (which drives the home
+            // overlay over a loaded page) can get stuck `true` and keep covering
+            // the page on resume until a back/forward toggle re-fires the sync.
+            // The address bar is never actually focused right after foregrounding,
+            // so clear the flag to match reality and drop the stale overlay.
+            if phase == .active { addressBarFocused = false }
         }
     }
 
