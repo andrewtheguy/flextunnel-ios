@@ -1,5 +1,38 @@
 name: Build unsigned iOS artifacts
 
+# ---------------------------------------------------------------------------
+# INTERNAL NOTE (team only — we own the dev.flexaccess.flextunnel* App IDs)
+#
+# The published flextunnel-ios-unsigned.xcarchive.zip is the "ready-to-sign"
+# artifact. Because we own the App IDs it was built with, we can turn it into
+# an ad-hoc IPA with a single xcodebuild -exportArchive — no manual codesign,
+# and it re-signs the app AND the embedded widget together. (External signers
+# who must rebrand the bundle IDs use docs/signing-unsigned-ipa.md instead;
+# that route cannot rename bundle IDs.)
+#
+#   ditto -x -k flextunnel-ios-unsigned.xcarchive.zip .
+#   cat > ExportOptions.plist <<'PLIST'
+#   <?xml version="1.0" encoding="UTF-8"?>
+#   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+#   <plist version="1.0"><dict>
+#     <key>method</key><string>release-testing</string>   <!-- Xcode's current name for Ad Hoc -->
+#     <key>teamID</key><string>YOUR_TEAM_ID</string>
+#     <key>signingStyle</key><string>automatic</string>
+#     <key>destination</key><string>export</string>
+#   </dict></plist>
+#   PLIST
+#   xcodebuild -exportArchive \
+#     -archivePath flextunnel-ios-unsigned.xcarchive \
+#     -exportPath export \
+#     -exportOptionsPlist ExportOptions.plist \
+#     -allowProvisioningUpdates
+#
+# -allowProvisioningUpdates + signingStyle automatic lets Xcode create/refresh
+# the ad-hoc profiles for both bundles against a signed-in Apple ID (or an App
+# Store Connect API key via -authenticationKeyPath). Ad Hoc installs only on
+# device UDIDs already registered with the team, so register targets first.
+# ---------------------------------------------------------------------------
+
 on:
   workflow_dispatch:
 
